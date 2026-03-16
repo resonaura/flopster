@@ -134,7 +134,8 @@ private:
 //==============================================================================
 class FlopsterAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public juce::FocusChangeListener,
-                                      public juce::Timer
+                                      public juce::Timer,
+                                      public juce::Button::Listener
 {
 public:
     FlopsterAudioProcessorEditor (FlopsterAudioProcessor&);
@@ -148,7 +149,12 @@ public:
     void timerCallback() override;
 
     //==========================================================================
+    // Button listener (octave shift buttons)
+    void buttonClicked (juce::Button* btn) override;
+
+    //==========================================================================
     // Keyboard handling for computer-keyboard MIDI input
+    // NOTE: only active in standalone mode — in plugin mode the host handles it.
     bool keyPressed      (const juce::KeyPress& key) override;
     bool keyStateChanged (bool isKeyDown) override;
 
@@ -165,8 +171,13 @@ private:
     void renderHead (juce::Graphics& g, int sx, int sy, int w, int h, int pos);
     void renderChar (juce::Graphics& g, int pixelX, int pixelY, int charIndex);
 
-    // Sends a note to the processor and updates the keyboard widget
+    // Sends a note to the processor via the COMPUTER KEYBOARD path.
+    // Applies kbOctaveOffset before injecting.  Standalone-only.
     void sendNote (int midiNote, int velocity);
+
+    // Sends a note to the processor via the ON-SCREEN KEYBOARD (mouse) path.
+    // Bypasses kbOctaveOffset — the visual key IS the intended note.
+    void sendRawNote (int midiNote, int velocity);
 
     // Checks all tracked keyboard keys and sends note-off for any that were
     // released since the last call
@@ -204,6 +215,19 @@ private:
 
     std::unique_ptr<PixelKeyboard>   pixelKeyboard;
 
+    // Octave shift controls (standalone mode only — always shown for visual
+    // reference but only functional in standalone)
+    std::unique_ptr<juce::TextButton> btnOctaveDown;
+    std::unique_ptr<juce::TextButton> btnOctaveUp;
+    std::unique_ptr<juce::Label>      lblOctave;
+
+    // Current keyboard octave offset in semitones (multiples of 12)
+    // Range: -36 .. +36  (i.e. ±3 octaves)
+    int kbOctaveOffset { 0 };
+
+    // True when running as a standalone application
+    bool isStandalone { false };
+
     //==========================================================================
     // FL-Studio-style computer keyboard mapping: keyCode -> midiNote
     // Built in the constructor
@@ -217,8 +241,11 @@ private:
 
     // Tracks which computer-keyboard keys are currently down (by midiNote),
     // so we can detect releases in keyStateChanged
-    // key = midiNote, value = juce::KeyPress code that triggered it
-    std::map<int, int> heldKbNotes;  // midiNote -> keyCode
+    // key = midiNote (raw, pre-shift), value = juce::KeyPress code that triggered it
+    std::map<int, int> heldKbNotes;        // rawNote  -> keyCode
+    // key = midiNote (raw, pre-shift), value = shifted note that was actually played
+    // Needed so releaseAllKbNotes sends the exact matching note-off.
+    std::map<int, int> heldKbShiftedNotes; // rawNote  -> shiftedNote
 
     //==========================================================================
     int  lastHeadPos    = -1;

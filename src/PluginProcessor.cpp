@@ -108,7 +108,11 @@ FlopsterAudioProcessor::FlopsterAudioProcessor()
 
     findPluginDir();
     scanPresets();
-    loadAllSamples();
+    // Do NOT call loadAllSamples() here — it blocks the constructor (and thus
+    // the host's plugin-scan thread) for potentially hundreds of milliseconds
+    // while reading .wav files from disk.  Instead we set the flag and let the
+    // editor's message-thread timer call loadAllSamples() on the first tick.
+    sampleLoadNeeded = true;
 }
 
 FlopsterAudioProcessor::~FlopsterAudioProcessor()
@@ -142,7 +146,14 @@ void FlopsterAudioProcessor::parameterChanged (const juce::String& parameterID, 
 void FlopsterAudioProcessor::prepareToPlay (double /*sampleRate*/, int /*samplesPerBlock*/)
 {
     updatePitch();
-    resetPlayer();
+    // Do NOT call loadAllSamples() here — it touches the file system and can
+    // take hundreds of milliseconds, which would stall the host's audio thread
+    // during initialisation.  The flag ensures the message-thread timer in the
+    // editor (or the first processBlock) schedules the load safely.
+    {
+        const juce::ScopedLock sl (samplesLock);
+        resetPlayer();
+    }
     memset (midiKeyState, 0, sizeof (midiKeyState));
     midiPitchBend      = 0.0f;
     midiPitchBendRange = 2.0f;
@@ -228,7 +239,12 @@ void FlopsterAudioProcessor::scanPresets()
 //==============================================================================
 int  FlopsterAudioProcessor::getNumPrograms()                            { return NUM_PROGRAMS; }
 int  FlopsterAudioProcessor::getCurrentProgram()                         { return currentProgram; }
-void FlopsterAudioProcessor::setCurrentProgram (int index)               { currentProgram = index; }
+void FlopsterAudioProcessor::setCurrentProgram (int index)
+{
+    if (index < 0 || index >= NUM_PROGRAMS) return;
+    currentProgram   = index;
+    sampleLoadNeeded = true;   // message-thread timer will call loadAllSamples()
+}
 
 const juce::String FlopsterAudioProcessor::getProgramName (int index)
 {
@@ -340,15 +356,30 @@ float FlopsterAudioProcessor::readSample (const SampleData& s, double pos) const
 
 void FlopsterAudioProcessor::loadAllSamples()
 {
+    // This function MUST be called on the message thread only.
+    // It takes the samplesLock for the entire duration so the audio thread
+    // cannot touch the sample arrays while they are being rebuilt.
+    juce::ScopedLock sl (samplesLock);
+
     if (currentProgramLoaded == currentProgram) return;
 
     juce::String presetName = programNames[currentProgram];
-    if (presetName == "empty") return;
+    if (presetName == "empty")
+    {
+        // Mark as loaded (even though there is nothing) so we do not keep
+        // retrying and burning CPU.
+        currentProgramLoaded = currentProgram;
+        samplesReady = false;
+        return;
+    }
 
     juce::File dir = pluginDir.getChildFile ("samples").getChildFile (presetName);
 
+    // Invalidate the audio thread's pointer before we touch the arrays.
+    samplesReady = false;
+    resetPlayer();  // sets FDD.head_sample = nullptr under the lock
+
     freeAllSamples();
-    resetPlayer();
 
     bool error = false;
 
@@ -379,12 +410,19 @@ void FlopsterAudioProcessor::loadAllSamples()
     resetPlayer();
 
     currentProgramLoaded = currentProgram;
+    sampleLoadNeeded     = false;
+    samplesReady         = true;
 
-    (void) error; // Non-fatal on Mac — some packs may be partial
+    (void) error; // Non-fatal — some packs may be partial
 }
 
 void FlopsterAudioProcessor::freeAllSamples()
 {
+    // Caller MUST hold samplesLock.
+    // Null out the live pointer first so the audio thread (if it somehow slips
+    // past the tryEnter guard) reads nullptr rather than freed memory.
+    FDD.head_sample = nullptr;
+
     freeSample (FDD.spindle_sample);
     freeSample (SampleDiskPush);
     freeSample (SampleDiskInsert);
@@ -394,16 +432,36 @@ void FlopsterAudioProcessor::freeAllSamples()
     for (int i = 0; i < STEP_SAMPLES_ALL; ++i) freeSample (SampleHeadStep[i]);
     for (int i = 0; i < HEAD_BUZZ_RANGE;  ++i) freeSample (SampleHeadBuzz[i]);
     for (int i = 0; i < HEAD_SEEK_RANGE;  ++i) freeSample (SampleHeadSeek[i]);
+
+    // Clear tail pointers — they all pointed into the now-freed arrays.
+    for (int i = 0; i < MAX_TAILS; ++i)
+        tails[i].sample = nullptr;
 }
 
 void FlopsterAudioProcessor::resetPlayer()
 {
+    // May be called from audio thread (inside samplesLock) or message thread.
     if (FDD.spindle_sample.length > 0)
         FDD.spindle_sample_ptr = FDD.spindle_sample.length - 1;
     else
         FDD.spindle_sample_ptr = 0;
 
-    FDD.head_sample = nullptr;
+    FDD.head_sample           = nullptr;
+    FDD.head_sample_ptr       = 0.0;
+    FDD.head_sample_fade_ptr  = 0.0;
+    FDD.head_level            = 0.0f;
+    FDD.head_fade_level       = 0.0f;
+    FDD.head_sample_loop      = false;
+    FDD.head_sample_loop_done = true;
+    FDD.sample_type           = SAMPLE_TYPE_NONE;
+    FDD.spindle_enable        = false;
+
+    for (int i = 0; i < MAX_TAILS; ++i)
+        tails[i].sample = nullptr;
+
+    memset (midiKeyState, 0, sizeof (midiKeyState));
+    FDD.low_freq_acc = 0.0f;
+    FDD.low_freq_add = 0.0f;
 }
 
 //==============================================================================
@@ -412,6 +470,11 @@ void FlopsterAudioProcessor::resetPlayer()
 
 void FlopsterAudioProcessor::tailAdd (SampleData* sample, double ptr, double step, float level)
 {
+    if (sample == nullptr || ! sample->isValid()) return;
+
+    // Wrap tailPtr defensively
+    if (tailPtr < 0 || tailPtr >= MAX_TAILS) tailPtr = 0;
+
     tails[tailPtr].sample = sample;
     tails[tailPtr].ptr    = ptr;
     tails[tailPtr].step   = step;
@@ -423,7 +486,10 @@ void FlopsterAudioProcessor::tailAdd (SampleData* sample, double ptr, double ste
 
 void FlopsterAudioProcessor::floppyStartHead (SampleData* sample, float gain, int type, bool loop, bool buzz, double relative)
 {
-    if (FDD.head_sample)
+    // Guard: if the incoming sample is null or empty, treat it as a stop.
+    if (sample != nullptr && ! sample->isValid()) sample = nullptr;
+
+    if (FDD.head_sample != nullptr && FDD.head_sample->isValid())
     {
         if (FDD.sample_type == SAMPLE_TYPE_SEEK || FDD.sample_type == SAMPLE_TYPE_BUZZ)
             tailAdd (FDD.head_sample, FDD.head_sample_ptr, FDD.sample_step, FDD.head_gain * FDD.head_level);
@@ -431,13 +497,13 @@ void FlopsterAudioProcessor::floppyStartHead (SampleData* sample, float gain, in
 
     FDD.head_sample            = sample;
     FDD.head_sample_loop       = loop;
-    FDD.head_sample_loop_done  = false;
+    FDD.head_sample_loop_done  = (sample == nullptr);  // nothing to loop if no sample
     FDD.head_sample_fade_ptr   = sample ? sample->loop_end : 0.0;
     FDD.head_gain              = gain;
     FDD.head_level             = 0.0f;
     FDD.head_fade_level        = 0.0f;
     FDD.head_buzz              = buzz;
-    FDD.sample_type            = type;
+    FDD.sample_type            = (sample != nullptr) ? type : SAMPLE_TYPE_NONE;
 
     if (relative == 0.0 || sample == nullptr)
     {
@@ -449,6 +515,11 @@ void FlopsterAudioProcessor::floppyStartHead (SampleData* sample, float gain, in
             FDD.head_sample_ptr = sample->loop_end / 3.0 * relative;
         else
             FDD.head_sample_ptr = sample->loop_end / 2.0 * relative;
+
+        // Clamp to valid range
+        if (FDD.head_sample_ptr < 0.0) FDD.head_sample_ptr = 0.0;
+        if (FDD.head_sample_ptr >= (double)sample->length)
+            FDD.head_sample_ptr = 0.0;
     }
 
     guiNeedsUpdate = true;
@@ -468,10 +539,12 @@ void FlopsterAudioProcessor::floppyStep (int pos)
 
     int sampleIdx = pos;
     if (sampleIdx >= 80) sampleIdx = 159 - sampleIdx;
-    if (sampleIdx < 0)   sampleIdx = 0;
+    if (sampleIdx < 0)               sampleIdx = 0;
     if (sampleIdx >= STEP_SAMPLES_ALL) sampleIdx = STEP_SAMPLES_ALL - 1;
 
-    floppyStartHead (&SampleHeadStep[sampleIdx], pHeadStepGain.load(), SAMPLE_TYPE_STEP, false, false, 0);
+    SampleData* s = &SampleHeadStep[sampleIdx];
+    if (s->isValid())
+        floppyStartHead (s, pHeadStepGain.load(), SAMPLE_TYPE_STEP, false, false, 0);
 
     ++FDD.head_pos;
     while (FDD.head_pos >= 160) FDD.head_pos -= 160;
@@ -509,6 +582,10 @@ bool FlopsterAudioProcessor::anyKeyDown() const
 //==============================================================================
 // MIDI event handler (called once per MIDI event, inside processBlock)
 //==============================================================================
+//==============================================================================
+// MIDI event handler (called once per MIDI event, inside processBlock,
+// already holding samplesLock via tryEnter in processBlock)
+//==============================================================================
 void FlopsterAudioProcessor::handleMidiEvent (const MidiEvent& ev)
 {
     bool prevAny = anyKeyDown();
@@ -535,7 +612,9 @@ void FlopsterAudioProcessor::handleMidiEvent (const MidiEvent& ev)
     // Find highest active note
     int note = -1;
     for (int n = 127; n >= 0; --n)
+    {
         if (midiKeyState[n]) { note = n; break; }
+    }
 
     bool spindleStop = true;
     bool headStop    = true;
@@ -604,21 +683,27 @@ void FlopsterAudioProcessor::handleMidiEvent (const MidiEvent& ev)
                 break;
 
             case 2: // head buzz
-                if (note >= HEAD_BASE_NOTE && note < HEAD_BASE_NOTE + HEAD_BUZZ_RANGE)
                 {
-                    floppyStartHead (&SampleHeadBuzz[note - HEAD_BASE_NOTE],
-                                     pHeadBuzzGain.load(), SAMPLE_TYPE_BUZZ, true, true, 0);
-                    FDD.head_pos = 40;
+                    int buzzIdx = note - HEAD_BASE_NOTE;
+                    if (buzzIdx >= 0 && buzzIdx < HEAD_BUZZ_RANGE && SampleHeadBuzz[buzzIdx].isValid())
+                    {
+                        floppyStartHead (&SampleHeadBuzz[buzzIdx],
+                                         pHeadBuzzGain.load(), SAMPLE_TYPE_BUZZ, true, true, 0);
+                        FDD.head_pos = 40;
+                    }
                 }
                 break;
 
             case 3: // head seek from last position
             case 4: // head seek from initial position
-                if (note >= HEAD_BASE_NOTE && note < HEAD_BASE_NOTE + HEAD_SEEK_RANGE)
                 {
-                    floppyStartHead (&SampleHeadSeek[note - HEAD_BASE_NOTE],
-                                     pHeadSeekGain.load(), SAMPLE_TYPE_SEEK, true, false,
-                                     (velType == 4) ? 0.0 : FDD.head_sample_relative_ptr);
+                    int seekIdx = note - HEAD_BASE_NOTE;
+                    if (seekIdx >= 0 && seekIdx < HEAD_SEEK_RANGE && SampleHeadSeek[seekIdx].isValid())
+                    {
+                        floppyStartHead (&SampleHeadSeek[seekIdx],
+                                         pHeadSeekGain.load(), SAMPLE_TYPE_SEEK, true, false,
+                                         (velType == 4) ? 0.0 : FDD.head_sample_relative_ptr);
+                    }
                 }
                 break;
             }
@@ -656,6 +741,7 @@ void FlopsterAudioProcessor::handleMidiEvent (const MidiEvent& ev)
 //==============================================================================
 float FlopsterAudioProcessor::renderOneSample()
 {
+    // Called from processBlock which already holds samplesLock (tryEnter).
     float levelSpindle = 0.0f;
     float levelHead    = 0.0f;
     float levelTails   = 0.0f;
@@ -663,14 +749,18 @@ float FlopsterAudioProcessor::renderOneSample()
     //--- Spindle ---
     if (FDD.spindle_sample.isValid())
     {
+        // Clamp ptr before reading to prevent out-of-bounds on sample change
+        if (FDD.spindle_sample_ptr < 0.0) FDD.spindle_sample_ptr = 0.0;
+
         levelSpindle = readSample (FDD.spindle_sample, FDD.spindle_sample_ptr) * pSpindleGain.load();
 
         FDD.spindle_sample_ptr += FDD.sample_step;
 
         if (FDD.spindle_enable)
         {
-            if (FDD.spindle_sample_ptr >= FDD.spindle_sample.loop_end)
-                FDD.spindle_sample_ptr -= (FDD.spindle_sample.loop_end - FDD.spindle_sample.loop_start);
+            double loopLen = FDD.spindle_sample.loop_end - FDD.spindle_sample.loop_start;
+            if (loopLen > 0.0 && FDD.spindle_sample_ptr >= FDD.spindle_sample.loop_end)
+                FDD.spindle_sample_ptr -= loopLen;
         }
         else
         {
@@ -678,21 +768,31 @@ float FlopsterAudioProcessor::renderOneSample()
                 FDD.spindle_sample_ptr  = FDD.spindle_sample.loop_end;
         }
 
-        if (FDD.spindle_sample_ptr > FDD.spindle_sample.length - 1)
-            FDD.spindle_sample_ptr = FDD.spindle_sample.length - 1;
+        double maxPtr = (double)(FDD.spindle_sample.length - 1);
+        if (maxPtr < 0.0) maxPtr = 0.0;
+        if (FDD.spindle_sample_ptr > maxPtr)
+            FDD.spindle_sample_ptr = maxPtr;
     }
 
     //--- Head ---
-    if (FDD.head_sample && FDD.head_sample->isValid())
+    // Re-check pointer validity every render call in case freeAllSamples raced
+    // (belt-and-suspenders: the tryEnter in processBlock is the primary guard).
+    if (FDD.head_sample != nullptr && FDD.head_sample->isValid())
     {
+        // Clamp ptr before reading
+        if (FDD.head_sample_ptr < 0.0) FDD.head_sample_ptr = 0.0;
+
         levelHead = readSample (*FDD.head_sample, FDD.head_sample_ptr) * FDD.head_gain * FDD.head_level;
 
         FDD.head_sample_ptr += FDD.sample_step;
 
         if (FDD.head_sample_loop)
         {
-            if (FDD.head_sample_ptr >= FDD.head_sample->loop_end)
-                FDD.head_sample_ptr = FDD.head_sample->loop_start;
+            double loopEnd   = FDD.head_sample->loop_end;
+            double loopStart = FDD.head_sample->loop_start;
+
+            if (loopEnd > loopStart && FDD.head_sample_ptr >= loopEnd)
+                FDD.head_sample_ptr = loopStart;
 
             if (! FDD.head_sample_loop_done)
             {
@@ -701,10 +801,10 @@ float FlopsterAudioProcessor::renderOneSample()
 
                 if (FDD.sample_type == SAMPLE_TYPE_SEEK)
                 {
-                    double loops = (FDD.head_sample->loop_start > 2000) ? 3.0 : 2.0;
+                    double loops = (loopStart > 2000) ? 3.0 : 2.0;
 
-                    if (FDD.head_sample->loop_end > 0)
-                        FDD.head_sample_relative_ptr = FDD.head_sample_ptr / FDD.head_sample->loop_end * loops;
+                    if (loopEnd > 0.0)
+                        FDD.head_sample_relative_ptr = FDD.head_sample_ptr / loopEnd * loops;
                     else
                         FDD.head_sample_relative_ptr = 0;
 
@@ -715,11 +815,12 @@ float FlopsterAudioProcessor::renderOneSample()
                     FDD.head_sample_relative_ptr = std::floor (FDD.head_sample_relative_ptr * 80.0) / 80.0;
 
                     FDD.head_pos = (int)(80.0 * FDD.head_sample_relative_ptr);
-                    if (FDD.head_pos >= 160) FDD.head_pos = 160;
+                    if (FDD.head_pos >= 160) FDD.head_pos = 159;
+                    if (FDD.head_pos < 0)    FDD.head_pos = 0;
                 }
                 else if (FDD.sample_type == SAMPLE_TYPE_BUZZ)
                 {
-                    double halfLoop = (FDD.head_sample->loop_end - FDD.head_sample->loop_start) / 2.0;
+                    double halfLoop = (loopEnd - loopStart) / 2.0;
                     FDD.head_pos = (FDD.head_sample_ptr < halfLoop) ? 40 : 41;
                 }
             }
@@ -731,18 +832,24 @@ float FlopsterAudioProcessor::renderOneSample()
                 if (FDD.head_level      < 0.0f) FDD.head_level      = 0.0f;
                 if (FDD.head_fade_level > 1.0f) FDD.head_fade_level = 1.0f;
 
-                if (FDD.head_sample_fade_ptr < FDD.head_sample->length)
+                if (FDD.head_sample != nullptr && FDD.head_sample_fade_ptr < (double)FDD.head_sample->length)
                 {
                     levelHead += readSample (*FDD.head_sample, FDD.head_sample_fade_ptr)
                                  * FDD.head_gain * FDD.head_fade_level;
 
                     FDD.head_sample_fade_ptr += FDD.sample_step;
 
-                    if (FDD.head_sample_fade_ptr >= FDD.head_sample->length)
+                    if (FDD.head_sample_fade_ptr >= (double)FDD.head_sample->length)
                     {
                         FDD.head_sample = nullptr;
-                        if (FDD.sample_type) { FDD.sample_type = 0; guiNeedsUpdate = true; }
+                        if (FDD.sample_type) { FDD.sample_type = SAMPLE_TYPE_NONE; guiNeedsUpdate = true; }
                     }
+                }
+                else
+                {
+                    // Fade ptr ran off the end: done
+                    FDD.head_sample = nullptr;
+                    if (FDD.sample_type) { FDD.sample_type = SAMPLE_TYPE_NONE; guiNeedsUpdate = true; }
                 }
             }
         }
@@ -751,10 +858,10 @@ float FlopsterAudioProcessor::renderOneSample()
             FDD.head_level += 1.0f / SAMPLE_FADE_IN_LEN;
             if (FDD.head_level > 1.0f) FDD.head_level = 1.0f;
 
-            if (FDD.head_sample_ptr >= FDD.head_sample->length)
+            if (FDD.head_sample != nullptr && FDD.head_sample_ptr >= (double)FDD.head_sample->length)
             {
                 FDD.head_sample = nullptr;
-                if (FDD.sample_type) { FDD.sample_type = 0; guiNeedsUpdate = true; }
+                if (FDD.sample_type) { FDD.sample_type = SAMPLE_TYPE_NONE; guiNeedsUpdate = true; }
             }
         }
     }
@@ -762,25 +869,29 @@ float FlopsterAudioProcessor::renderOneSample()
     //--- Tails ---
     for (int i = 0; i < MAX_TAILS; ++i)
     {
-        if (! tails[i].sample) continue;
+        if (tails[i].sample == nullptr || ! tails[i].sample->isValid())
+        {
+            tails[i].sample = nullptr;
+            continue;
+        }
 
         levelTails += readSample (*tails[i].sample, tails[i].ptr) * tails[i].level;
 
         tails[i].ptr += tails[i].step;
 
-        if (tails[i].sample->loop_end > 0)
+        if (tails[i].sample->loop_end > tails[i].sample->loop_start)
         {
             if (tails[i].ptr >= tails[i].sample->loop_end)
                 tails[i].ptr = tails[i].sample->loop_start;
         }
         else
         {
-            if (tails[i].ptr >= tails[i].sample->length)
-                tails[i].level = 0;
+            if (tails[i].ptr >= (double)tails[i].sample->length)
+                tails[i].level = 0.0f;
         }
 
         tails[i].level -= 1.0f / 200.0f;
-        if (tails[i].level <= 0) tails[i].sample = nullptr;
+        if (tails[i].level <= 0.0f) tails[i].sample = nullptr;
     }
 
     float total = (levelSpindle + levelHead + levelTails) * 2.0f * pOutputGain.load();
@@ -792,6 +903,12 @@ float FlopsterAudioProcessor::renderOneSample()
 //==============================================================================
 void FlopsterAudioProcessor::injectMidiNote (int note, int velocity)
 {
+    // Apply the keyboard octave offset (set by the editor UI, never on audio thread).
+    note += kbOctaveOffset;
+
+    // Clamp to valid MIDI range
+    if (note < 0 || note > 127) return;
+
     const juce::ScopedLock sl (guiMidiLock);
     if (velocity > 0)
         pendingGuiMidi.addEvent (juce::MidiMessage::noteOn  (1, note, (uint8_t)velocity), 0);
@@ -817,9 +934,28 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     buffer.clear();
 
-    // Reload samples if preset changed
+    // If samples are not ready yet (e.g. loading in progress on the message
+    // thread), output silence for this block and return immediately.
+    // We use tryEnter so we NEVER block the real-time thread; if the message
+    // thread is currently loading samples we skip this block safely.
+    if (! samplesLock.tryEnter())
+        return;
+
+    // samplesLock is now held — release it via RAII at end of scope.
+    struct SamplesLockGuard
+    {
+        juce::CriticalSection& cs;
+        SamplesLockGuard (juce::CriticalSection& c) : cs (c) {}
+        ~SamplesLockGuard() { cs.exit(); }
+    } samplesGuard (samplesLock);
+
+    // If a sample reload was requested from the message thread (preset change
+    // via setCurrentProgram) but not yet picked up, update the internal flag
+    // so the editor timer sees it on the next tick.
+    // NOTE: We do NOT call loadAllSamples() here because file I/O on the
+    // real-time thread would cause glitches / host crashes.
     if (currentProgramLoaded != currentProgram)
-        loadAllSamples();
+        sampleLoadNeeded = true;
 
     updatePitch();
 
@@ -828,13 +964,11 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     int numSamples = buffer.getNumSamples();
 
-    // Build a simple sorted list of (samplePosition, MidiEvent) pairs
-    // We iterate sample-by-sample and fire MIDI events at their delta time
+    // Iterate sample-by-sample, firing MIDI events at their exact positions.
     juce::MidiBuffer::Iterator it (midiMessages);
     juce::MidiMessage msg;
     int midiSamplePos = 0;
 
-    // We'll use a simple two-pointer approach: track next midi event
     bool hasMidi = it.getNextEvent (msg, midiSamplePos);
 
     for (int s = 0; s < numSamples; ++s)
@@ -911,6 +1045,7 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
 }
 
+//==============================================================================
 //==============================================================================
 juce::AudioProcessorEditor* FlopsterAudioProcessor::createEditor()
 {

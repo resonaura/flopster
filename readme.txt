@@ -174,7 +174,6 @@ v1.0  30.06.17 - Initial release
 Contact
 
 Original author (Shiru):
-  Mail:    shiru@mail.ru
   Web:     http://shiru.untergrund.net
   Support: https://www.patreon.com/shiru8bit
 

@@ -169,6 +169,24 @@ public:
     // The directory containing the plugin's samples/ folder
     juce::File pluginDir;
 
+    // Set from message thread when preset changes; audio thread sees it and
+    // schedules a safe reload via the message thread timer.
+    std::atomic<bool> sampleLoadNeeded { false };
+
+    // True once samples have been loaded at least once and are safe to read.
+    // Audio thread checks this before touching any SampleData.
+    std::atomic<bool> samplesReady { false };
+
+    // Keyboard octave offset (in semitones, multiples of 12).
+    // Written by the editor (message thread), read only in injectMidiNote —
+    // never on the audio thread, so a plain int protected by the guiMidiLock
+    // is sufficient.
+    int kbOctaveOffset { 0 };
+
+    // Load all samples for the current program.
+    // MUST be called on the message thread only (does file I/O under samplesLock).
+    void loadAllSamples();
+
 private:
     //==========================================================================
     juce::MidiBuffer      pendingGuiMidi;
@@ -219,6 +237,11 @@ private:
     int currentProgramLoaded = -1;
 
     //==========================================================================
+    // Guards all SampleData arrays: both the message-thread loader and the
+    // audio-thread renderer must hold this before touching sample data.
+    // We use a TryEnterCriticalSection pattern in the audio thread so we
+    // never block the real-time thread — if the lock is taken we simply output
+    // silence for that block and retry next time.
     juce::CriticalSection samplesLock;
 
     //==========================================================================
@@ -226,7 +249,6 @@ private:
     bool  loadSample   (SampleData& s, const juce::File& file);
     void  freeSample   (SampleData& s);
     float readSample   (const SampleData& s, double pos) const;
-    void  loadAllSamples();
     void  freeAllSamples();
     void  resetPlayer();
     void  findPluginDir();

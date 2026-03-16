@@ -242,7 +242,6 @@ See [wtfpl.net](http://www.wtfpl.net/) for details.
 ## Contact
 
 **Shiru** (original author)  
-✉️ shiru@mail.ru  
 🌐 [shiru.untergrund.net](http://shiru.untergrund.net)  
 ❤️ [patreon.com/shiru8bit](https://www.patreon.com/shiru8bit)
 

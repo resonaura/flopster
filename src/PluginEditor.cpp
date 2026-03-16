@@ -521,21 +521,55 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
 
     // -------------------------------------------------------------------------
     // Pixel keyboard
+    // On-screen keyboard uses sendRawNote — no octave offset for mouse clicks.
     pixelKeyboard = std::make_unique<PixelKeyboard> (
-        [this](int note, int vel) { sendNote (note, vel); });
+        [this](int note, int vel) { sendRawNote (note, vel); });
 
-    bool isStandalone = false;
 #if JUCE_STANDALONE_APPLICATION
     isStandalone = true;
 #else
     isStandalone = juce::JUCEApplication::isStandaloneApp();
 #endif
+
+    // Key labels are only shown in standalone (computer keyboard plays notes).
     pixelKeyboard->setShowKeyLabels (isStandalone);
     addAndMakeVisible (*pixelKeyboard);
 
     // -------------------------------------------------------------------------
-    // Keyboard focus so we receive key events for MIDI input
-    setWantsKeyboardFocus (true);
+    // Octave shift controls — always visible so the user can see the current
+    // octave offset. Only functional in standalone mode.
+    btnOctaveDown = std::make_unique<juce::TextButton> ("-");
+    btnOctaveUp   = std::make_unique<juce::TextButton> ("+");
+    lblOctave     = std::make_unique<juce::Label> ("octLbl", "Oct: 0");
+
+    auto styleOctBtn = [&](juce::TextButton& btn)
+    {
+        btn.setColour (juce::TextButton::buttonColourId,   juce::Colours::black);
+        btn.setColour (juce::TextButton::textColourOffId,  juce::Colour (220, 90, 128));
+        btn.setColour (juce::ComboBox::outlineColourId,    juce::Colour (220, 90, 128));
+        btn.addListener (this);
+    };
+    styleOctBtn (*btnOctaveDown);
+    styleOctBtn (*btnOctaveUp);
+
+    lblOctave->setColour (juce::Label::textColourId, juce::Colour (220, 90, 128));
+    lblOctave->setFont (juce::Font (juce::FontOptions (11.0f)));
+    lblOctave->setJustificationType (juce::Justification::centred);
+
+    // Dim them visually in plugin mode to signal they have no effect
+    if (! isStandalone)
+    {
+        btnOctaveDown->setAlpha (0.4f);
+        btnOctaveUp  ->setAlpha (0.4f);
+    }
+
+    addAndMakeVisible (*btnOctaveDown);
+    addAndMakeVisible (*btnOctaveUp);
+    addAndMakeVisible (*lblOctave);
+
+    // -------------------------------------------------------------------------
+    // Keyboard focus so we receive key events for MIDI input (standalone only).
+    setWantsKeyboardFocus (isStandalone);
     buildKbMap();
 
     // -------------------------------------------------------------------------
@@ -557,6 +591,13 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     // Register as a global focus listener so we know when the app loses focus
     // (Cmd/Alt+Tab) and can release stuck notes.
     juce::Desktop::getInstance().addFocusChangeListener (this);
+
+    // -------------------------------------------------------------------------
+    // Trigger the initial sample load on the message thread (safe: no audio
+    // thread is running yet at construction time, but we keep this consistent
+    // with the deferred pattern used for preset changes).
+    if (processorRef.sampleLoadNeeded.load())
+        processorRef.loadAllSamples();
 }
 
 FlopsterAudioProcessorEditor::~FlopsterAudioProcessorEditor()
@@ -564,6 +605,9 @@ FlopsterAudioProcessorEditor::~FlopsterAudioProcessorEditor()
     stopTimer();
     juce::Desktop::getInstance().removeFocusChangeListener (this);
     releaseAllKbNotes();
+
+    if (btnOctaveDown) btnOctaveDown->removeListener (this);
+    if (btnOctaveUp)   btnOctaveUp  ->removeListener (this);
 }
 
 //==============================================================================
@@ -627,15 +671,66 @@ void FlopsterAudioProcessorEditor::buildKbMap()
 }
 
 //==============================================================================
+void FlopsterAudioProcessorEditor::buttonClicked (juce::Button* btn)
+{
+    if (! isStandalone) return;   // octave buttons do nothing in plugin mode
+
+    if (btn == btnOctaveDown.get())
+    {
+        kbOctaveOffset -= 12;
+        if (kbOctaveOffset < -36) kbOctaveOffset = -36;
+    }
+    else if (btn == btnOctaveUp.get())
+    {
+        kbOctaveOffset += 12;
+        if (kbOctaveOffset > 36) kbOctaveOffset = 36;
+    }
+
+    // Keep processor's offset in sync (used in injectMidiNote)
+    processorRef.kbOctaveOffset = kbOctaveOffset;
+
+    // Release any currently held notes before the octave changes so they
+    // don't get stuck at the old pitch.
+    releaseAllKbNotes();
+
+    int octaveNum = kbOctaveOffset / 12;
+    lblOctave->setText ("Oct: " + juce::String (octaveNum >= 0 ? "+" : "") + juce::String (octaveNum),
+                        juce::dontSendNotification);
+}
+
+//==============================================================================
+// sendNote — used by the COMPUTER KEYBOARD path.
+// kbOctaveOffset is added inside processor's injectMidiNote, so we light up
+// the *shifted* note on the on-screen keyboard so it matches what actually plays.
 void FlopsterAudioProcessorEditor::sendNote (int midiNote, int velocity)
 {
+    if (! isStandalone) return;   // computer-keyboard MIDI only in standalone
+
     processorRef.injectMidiNote (midiNote, velocity);
+
+    // Light up the shifted note on the visual keyboard so it matches what plays
+    int shifted = midiNote + kbOctaveOffset;
+    pixelKeyboard->setNoteActive (shifted, velocity > 0, velocity);
+}
+
+// sendRawNote — used by MOUSE CLICKS on the on-screen keyboard widget.
+// The note is sent verbatim — no octave offset.  We temporarily zero the
+// processor's kbOctaveOffset so injectMidiNote passes the note through unchanged.
+void FlopsterAudioProcessorEditor::sendRawNote (int midiNote, int velocity)
+{
+    int savedOffset = processorRef.kbOctaveOffset;
+    processorRef.kbOctaveOffset = 0;
+    processorRef.injectMidiNote (midiNote, velocity);
+    processorRef.kbOctaveOffset = savedOffset;
     pixelKeyboard->setNoteActive (midiNote, velocity > 0, velocity);
 }
 
 //==============================================================================
 bool FlopsterAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 {
+    // Computer keyboard MIDI input is standalone-only.
+    if (! isStandalone) return false;
+
     int ch = key.getTextCharacter();
     // Convert uppercase to lowercase for letter keys
     if (ch >= 'A' && ch <= 'Z') ch += 32;
@@ -649,6 +744,9 @@ bool FlopsterAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
             {
                 heldKbNotes[m.midiNote] = ch;
                 sendNote (m.midiNote, 80);
+                // Also record the shifted note so releaseAllKbNotes can send the
+                // exact note-off that matches what was actually played.
+                heldKbShiftedNotes[m.midiNote] = m.midiNote + kbOctaveOffset;
             }
             return true;
         }
@@ -659,6 +757,7 @@ bool FlopsterAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 //==============================================================================
 bool FlopsterAudioProcessorEditor::keyStateChanged (bool /*isKeyDown*/)
 {
+    if (! isStandalone) return false;
     checkKeyboardReleases();
     return false;
 }
@@ -666,12 +765,28 @@ bool FlopsterAudioProcessorEditor::keyStateChanged (bool /*isKeyDown*/)
 //==============================================================================
 void FlopsterAudioProcessorEditor::releaseAllKbNotes()
 {
-    // Unconditionally send note-off for every held key and clear the map.
-    // Called whenever the window loses focus so notes never get stuck.
+    // Unconditionally send note-off for every held key and clear the maps.
+    // We must send note-off for the SHIFTED note that was actually played,
+    // not the raw note — otherwise the host/processor never sees the matching
+    // note-off and the note stays stuck.
     for (auto& kv : heldKbNotes)
-        sendNote (kv.first, 0);
+    {
+        int rawNote     = kv.first;
+        int shiftedNote = rawNote + kbOctaveOffset;   // fallback
+        auto it = heldKbShiftedNotes.find (rawNote);
+        if (it != heldKbShiftedNotes.end())
+            shiftedNote = it->second;
+
+        // Send note-off bypassing the offset (note is already shifted)
+        processorRef.kbOctaveOffset = 0;
+        processorRef.injectMidiNote (shiftedNote, 0);
+        processorRef.kbOctaveOffset = kbOctaveOffset;
+
+        pixelKeyboard->setNoteActive (shiftedNote, false, 0);
+    }
 
     heldKbNotes.clear();
+    heldKbShiftedNotes.clear();
 }
 
 //==============================================================================
@@ -708,10 +823,23 @@ void FlopsterAudioProcessorEditor::checkKeyboardReleases()
         if (! kp.isCurrentlyDown())
             toRelease.push_back (midiNote);
     }
-    for (int note : toRelease)
+    for (int rawNote : toRelease)
     {
-        heldKbNotes.erase (note);
-        sendNote (note, 0);
+        // Find the shifted note that was actually played at press time
+        int shiftedNote = rawNote + kbOctaveOffset;  // fallback
+        auto it = heldKbShiftedNotes.find (rawNote);
+        if (it != heldKbShiftedNotes.end())
+            shiftedNote = it->second;
+
+        heldKbNotes.erase (rawNote);
+        heldKbShiftedNotes.erase (rawNote);
+
+        // Send note-off for the exact shifted note
+        processorRef.kbOctaveOffset = 0;
+        processorRef.injectMidiNote (shiftedNote, 0);
+        processorRef.kbOctaveOffset = kbOctaveOffset;
+
+        pixelKeyboard->setNoteActive (shiftedNote, false, 0);
     }
 }
 
@@ -729,6 +857,13 @@ void FlopsterAudioProcessorEditor::globalFocusChanged (juce::Component* focusedC
 //==============================================================================
 void FlopsterAudioProcessorEditor::timerCallback()
 {
+    // ---- Service deferred sample loads (preset change or initial load) ----
+    // loadAllSamples() must only be called on the message thread, never from
+    // the audio thread.  The processor sets sampleLoadNeeded = true to request
+    // a reload; we pick it up here on every timer tick.
+    if (processorRef.sampleLoadNeeded.load())
+        processorRef.loadAllSamples();
+
     if (processorRef.guiNeedsUpdate.exchange (false))
         repaint();
 
@@ -741,8 +876,10 @@ void FlopsterAudioProcessorEditor::timerCallback()
     sliderOctave  ->refreshValue();
     sliderOutput  ->refreshValue();
 
-    // Also check for key releases (in case keyStateChanged was missed)
-    checkKeyboardReleases();
+    // Also check for key releases (in case keyStateChanged was missed).
+    // Skip in plugin mode — we never hold keyboard notes there.
+    if (isStandalone)
+        checkKeyboardReleases();
 }
 
 //==============================================================================
@@ -897,10 +1034,24 @@ void FlopsterAudioProcessorEditor::resized()
     presetLabel->setBounds (4,  presetBarY + 4, 44, presetBarH - 8);
     presetBox  ->setBounds (50, presetBarY + 2, getWidth() - 54, presetBarH - 4);
 
-    // ---- Pixel keyboard ----
+    // ---- Pixel keyboard + octave controls ----
+    // Layout: [Oct-btn][Oct-label][Oct+btn] strip at left, then the keyboard
+    //         fills the rest.  The octave strip sits in the top portion of the
+    //         keyboard area to leave maximum height for the keys themselves.
     int kbY = presetBarY + presetBarH;
     int kbH = 96;
-    pixelKeyboard->setBounds (0, kbY, getWidth(), kbH);
+
+    static constexpr int OCT_STRIP_H = 22;
+    static constexpr int OCT_BTN_W   = 24;
+    static constexpr int OCT_LBL_W   = 56;
+
+    // Octave strip runs across the top of the keyboard area
+    btnOctaveDown->setBounds (0,               kbY, OCT_BTN_W, OCT_STRIP_H);
+    lblOctave    ->setBounds (OCT_BTN_W,        kbY, OCT_LBL_W, OCT_STRIP_H);
+    btnOctaveUp  ->setBounds (OCT_BTN_W + OCT_LBL_W, kbY, OCT_BTN_W, OCT_STRIP_H);
+
+    // Piano keyboard sits below the strip
+    pixelKeyboard->setBounds (0, kbY + OCT_STRIP_H, getWidth(), kbH - OCT_STRIP_H);
 
     // Credits bar is painted but needs no child widget
 }
