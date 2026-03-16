@@ -14,6 +14,17 @@
 //   msi      → tools/win-msi.bat      (Windows only — produces .msi)
 //   deb      → tools/linux-deb.sh     (Linux only — produces .deb)
 //   appimage → tools/linux-appimage.sh (Linux only — produces .AppImage)
+//
+// Windows arch flags (forwarded to win-build.bat / win-install.bat / win-msi.bat):
+//   --arch <arch>    arm64 | x64 | x86
+//                    Default on ARM host : arm64
+//                    Default on x64 host : x64
+//
+// Examples:
+//   node scripts/run.js build --arch arm64
+//   node scripts/run.js build --arch x64
+//   node scripts/run.js build --arch x86
+//   node scripts/run.js msi   --arch arm64
 
 "use strict";
 
@@ -69,8 +80,15 @@ if (!action || action === "--help" || action === "-h") {
     deb        Build Linux .deb package           (Linux only)
     appimage   Build Linux .AppImage              (Linux only)
 
+  Windows arch options (for build / install / msi):
+    --arch <arch>    Target architecture: arm64 | x64 | x86
+                     Default on ARM host : arm64
+                     Default on x64 host : x64
+
   All extra arguments are forwarded to the underlying script.
   e.g.  node scripts/run.js build --rebuild --debug
+  e.g.  node scripts/run.js build --arch arm64
+  e.g.  node scripts/run.js msi   --arch x64
 `);
   process.exit(0);
 }

@@ -9,6 +9,10 @@
 //    node scripts/dist.js            # auto-detect platform
 //    node scripts/dist.js --mac      # macOS  → dist/Flopster-mac-1.24.zip
 //    node scripts/dist.js --win      # Windows → dist/Flopster-win-1.24.zip
+//    node scripts/dist.js --win --arch arm64   # ARM64 only
+//    node scripts/dist.js --win --arch x64     # x64 only
+//    node scripts/dist.js --win --arch x86     # x86 only
+//    node scripts/dist.js --win --all-arch     # arm64 + x64 + x86 (on ARM host)
 //    node scripts/dist.js --linux    # Linux   → dist/Flopster-linux-1.24.zip
 //    node scripts/dist.js --rebuild  # force clean rebuild before packaging
 //    node scripts/dist.js --no-build # skip build, use existing artefacts
@@ -16,7 +20,8 @@
 //  What goes into each zip:
 //
 //    macOS   → Flopster-1.24.pkg  +  TROUBLESHOOTING.md
-//    Windows → Flopster-1.24.msi  +  TROUBLESHOOTING.md
+//    Windows → Flopster-1.24-<arch>.msi  +  TROUBLESHOOTING.md
+//              (--all-arch produces one zip per architecture)
 //    Linux   → flopster_1.24_amd64.deb
 //              Flopster-1.24-x86_64.AppImage
 //              TROUBLESHOOTING.md
@@ -55,24 +60,84 @@ const doRebuild = argv.includes("--rebuild");
 const noBuild = argv.includes("--no-build");
 const showHelp = argv.includes("--help") || argv.includes("-h");
 
+// Windows arch flags
+const allArch = argv.includes("--all-arch");
+const archIdx = argv.indexOf("--arch");
+const explicitArch = archIdx !== -1 ? argv[archIdx + 1] : null;
+
+// Detect whether we're running on a Windows ARM64 host
+function detectWinHostArch() {
+  const env = process.env;
+  // PROCESSOR_ARCHITECTURE is set to ARM64 natively; on x64 it's AMD64.
+  // PROCESSOR_ARCHITEW6432 is set to AMD64 when a 32-bit process runs on x64.
+  const pa = (env.PROCESSOR_ARCHITECTURE || "").toLowerCase();
+  const pa2 = (env.PROCESSOR_ARCHITEW6432 || "").toLowerCase();
+  if (pa === "arm64" || pa2 === "arm64") return "arm64";
+  return "x64";
+}
+
+const WIN_HOST_ARCH = detectWinHostArch();
+
+// Architectures available when --all-arch is used
+// On ARM host all three are natively/cross-supported by MSVC.
+// On x64 host we include x64 and x86 (arm64 cross-compile also works but is
+// opt-in only — user must pass --arch arm64 explicitly on x64 hosts).
+function defaultAllArchList() {
+  if (WIN_HOST_ARCH === "arm64") return ["arm64", "x64", "x86"];
+  return ["x64", "x86"];
+}
+
+function resolveWinArchList() {
+  if (allArch) return defaultAllArchList();
+  if (explicitArch) {
+    const a = explicitArch
+      .toLowerCase()
+      .replace("amd64", "x64")
+      .replace("x86_64", "x64")
+      .replace("win32", "x86")
+      .replace("i686", "x86")
+      .replace("i386", "x86");
+    if (!["arm64", "x64", "x86"].includes(a)) {
+      die(
+        `Unknown --arch value: ${explicitArch}. Valid values: arm64, x64, x86`,
+      );
+    }
+    return [a];
+  }
+  // Default: all supported archs for this host
+  return defaultAllArchList();
+}
+
 if (showHelp) {
   console.log(`
   Usage: node scripts/dist.js [platform] [options]
 
   Platforms (default: current OS):
-    --mac        Build macOS distribution  (.pkg inside zip)
-    --win        Build Windows distribution (.msi inside zip)
-    --linux      Build Linux distribution  (.deb + .AppImage inside zip)
+    --mac              Build macOS distribution  (.pkg inside zip)
+    --win              Build Windows distribution (.msi inside zip)
+                       Default on ARM host: arm64 + x64 + x86
+                       Default on x64 host: x64 + x86
+    --linux            Build Linux distribution  (.deb + .AppImage inside zip)
 
-  Options:
-    --rebuild    Force clean rebuild before packaging
-    --no-build   Skip the build step, use existing artefacts
-    --help       Show this help
+  Windows arch options:
+    --arch <arch>      Target a specific architecture only: arm64 | x64 | x86
+    --all-arch         Explicitly build all supported architectures (same as default)
+                       On ARM host: arm64 + x64 + x86
+                       On x64 host: x64 + x86
+
+  General options:
+    --rebuild          Force clean rebuild before packaging
+    --no-build         Skip the build step, use existing artefacts
+    --help             Show this help
 
   Output:
     dist/Flopster-mac-${VERSION}.zip
-    dist/Flopster-win-${VERSION}.zip
+    dist/Flopster-win-${VERSION}-arm64.zip   (Windows ARM64, built on ARM host)
+    dist/Flopster-win-${VERSION}-x64.zip     (Windows x64)
+    dist/Flopster-win-${VERSION}-x86.zip     (Windows x86)
     dist/Flopster-linux-${VERSION}.zip
+
+  On ARM Windows, running --win with no --arch produces all three zips at once.
 `);
   process.exit(0);
 }
@@ -203,26 +268,41 @@ function distMac() {
   return zipPath;
 }
 
-function distWin() {
+function distWinArch(arch) {
   if (!isWin) die("Windows dist must be built on Windows.");
 
-  step("Building Windows installer (.msi)");
+  step(`Building Windows installer (.msi) for ${arch}`);
   const msiScript = path.join(TOOLS, "win-msi.bat");
   if (!fs.existsSync(msiScript)) die(`Not found: tools/win-msi.bat`);
-  runBat(msiScript, buildToolArgs());
+  runBat(msiScript, [...buildToolArgs(), "--arch", arch]);
 
-  const msi = path.join(DIST, `Flopster-${VERSION}.msi`);
+  const msi = path.join(DIST, `Flopster-${VERSION}-${arch}.msi`);
   if (!fs.existsSync(msi)) die(`Expected msi not found: ${msi}`);
-  ok(`Flopster-${VERSION}.msi  (${sizeMB(msi)})`);
+  ok(`Flopster-${VERSION}-${arch}.msi  (${sizeMB(msi)})`);
 
-  step("Assembling Windows zip");
-  const zipPath = path.join(DIST, `Flopster-win-${VERSION}.zip`);
+  step(`Assembling Windows zip for ${arch}`);
+  const zipPath = path.join(DIST, `Flopster-win-${VERSION}-${arch}.zip`);
   buildZip(zipPath, [msi, TROUBLE]);
 
-  ok(`Flopster-win-${VERSION}.zip  (${sizeMB(zipPath)})`);
+  ok(`Flopster-win-${VERSION}-${arch}.zip  (${sizeMB(zipPath)})`);
   log(zipPath);
 
   return zipPath;
+}
+
+function distWin() {
+  if (!isWin) die("Windows dist must be built on Windows.");
+
+  const archList = resolveWinArchList();
+  log(
+    `Windows target arch(es): ${archList.join(", ")}  (host: ${WIN_HOST_ARCH})`,
+  );
+
+  const results = [];
+  for (const arch of archList) {
+    results.push(distWinArch(arch));
+  }
+  return results;
 }
 
 function distLinux() {
@@ -307,5 +387,9 @@ console.log("  ╔════════════════════�
 console.log("  ║   ✅  Done!                                  ║");
 console.log("  ╚══════════════════════════════════════════════╝");
 console.log("");
-console.log(`  ${result}`);
+if (Array.isArray(result)) {
+  result.forEach((r) => console.log(`  ${r}`));
+} else {
+  console.log(`  ${result}`);
+}
 console.log("");

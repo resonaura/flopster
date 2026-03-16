@@ -10,11 +10,14 @@ chcp 65001 >nul 2>&1
 ::  Optionally builds the plugin from source if artefacts are missing.
 ::
 ::  Usage:
-::    make_msi.bat [--rebuild] [--no-build] [--out <dir>] [--help]
+::    win-msi.bat [--rebuild] [--no-build] [--arch <arch>] [--out <dir>] [--help]
 ::
 ::  Flags:
 ::    --rebuild        Force clean rebuild of plugin before packaging
 ::    --no-build       Skip build entirely; fail if artefacts are missing
+::    --arch <arch>    Target architecture: arm64 | x64 | x86
+::                     Default on ARM host : arm64
+::                     Default on x64 host : x64
 ::    --out <dir>      Output directory for the .msi  (default: dist\)
 ::    --help, -h       Show this help and exit
 ::
@@ -39,23 +42,22 @@ set "MANUFACTURER=Shiru and Resonaura"
 set "VERSION=1.24.0.0"
 set "VERSION_SHORT=1.24"
 set "UPGRADE_CODE={A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
-set "MSI_NAME=Flopster-1.24.msi"
 
 :: ── Paths ─────────────────────────────────────────────────────────────────────
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 for %%I in ("%SCRIPT_DIR%\..") do set "ROOT=%%~fI"
 
-set "BUILD=%ROOT%\build"
 set "ASSETS=%ROOT%\assets"
 set "SAMPLES=%ROOT%\samples"
-set "ARTEFACTS=%BUILD%\Flopster_artefacts\Release"
-set "VST3_SRC=%ARTEFACTS%\VST3\Flopster.vst3"
-set "EXE_SRC=%ARTEFACTS%\Standalone\Flopster.exe"
 
-:: WiX working directory — all generated files land here
-set "WIX_WORK=%BUILD%\wix-work"
-set "STAGE=%WIX_WORK%\stage"
+:: ── Auto-detect host architecture ────────────────────────────────────────────
+set "HOST_ARCH=x64"
+if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64"  set "HOST_ARCH=arm64"
+if /i "%PROCESSOR_ARCHITEW6432%"=="ARM64"  set "HOST_ARCH=arm64"
+
+:: Default target = host
+set "TARGET_ARCH=%HOST_ARCH%"
 
 :: ── Defaults ──────────────────────────────────────────────────────────────────
 set "REBUILD=0"
@@ -77,6 +79,14 @@ if /i "%~1"=="--no-build" (
     set "NO_BUILD=1"
     shift & goto :parse_args
 )
+if /i "%~1"=="--arch" (
+    if "%~2"=="" (
+        echo  [ERROR] --arch requires an argument: arm64, x64, x86
+        exit /b 1
+    )
+    set "TARGET_ARCH=%~2"
+    shift & shift & goto :parse_args
+)
 if /i "%~1"=="--out" (
     if "%~2"=="" (
         echo  [ERROR] --out requires a directory argument.
@@ -96,12 +106,47 @@ if "!REBUILD!"=="1" if "!NO_BUILD!"=="1" (
     exit /b 1
 )
 
+:: ── Normalise / validate TARGET_ARCH ─────────────────────────────────────────
+if /i "!TARGET_ARCH!"=="x86_64"  set "TARGET_ARCH=x64"
+if /i "!TARGET_ARCH!"=="amd64"   set "TARGET_ARCH=x64"
+if /i "!TARGET_ARCH!"=="win32"   set "TARGET_ARCH=x86"
+if /i "!TARGET_ARCH!"=="i686"    set "TARGET_ARCH=x86"
+if /i "!TARGET_ARCH!"=="i386"    set "TARGET_ARCH=x86"
+
+if /i "!TARGET_ARCH!" neq "arm64" (
+  if /i "!TARGET_ARCH!" neq "x64" (
+    if /i "!TARGET_ARCH!" neq "x86" (
+      echo  [ERROR] Unknown --arch value: !TARGET_ARCH!
+      echo          Valid values: arm64, x64, x86
+      exit /b 1
+    )
+  )
+)
+
+:: ── Derive per-arch build/artefact paths ─────────────────────────────────────
+set "BUILD=%ROOT%\build-!TARGET_ARCH!"
+set "ARTEFACTS=%BUILD%\Flopster_artefacts\Release"
+set "VST3_SRC=%ARTEFACTS%\VST3\Flopster.vst3"
+set "EXE_SRC=%ARTEFACTS%\Standalone\Flopster.exe"
+
+:: WiX working directory — all generated files land here
+set "WIX_WORK=%BUILD%\wix-work"
+set "STAGE=%WIX_WORK%\stage"
+
+:: MSI output filename includes arch
+set "MSI_NAME=Flopster-%VERSION_SHORT%-!TARGET_ARCH!.msi"
+
 :: ── Banner ────────────────────────────────────────────────────────────────────
 echo(
 echo  +=======================================================+
 echo  ^|   Flopster MSI Builder  v%VERSION_SHORT%                       ^|
 echo  ^|   by Shiru ^& Resonaura                               ^|
 echo  +=======================================================+
+echo(
+echo  [INFO]  Target arch : !TARGET_ARCH!
+echo  [INFO]  Host arch   : %HOST_ARCH%
+echo  [INFO]  MSI name    : !MSI_NAME!
+echo  [INFO]  Build dir   : !BUILD!
 echo(
 
 :: =============================================================================
@@ -125,6 +170,23 @@ for /f "tokens=3" %%V in ('cmake --version 2^>^&1 ^| findstr /i "cmake version"'
 set "HAS_NINJA=0"
 set "GENERATOR="
 set "EXTRA_FLAGS="
+set "USE_NINJA=0"
+
+:: Map TARGET_ARCH → VS platform name
+if /i "!TARGET_ARCH!"=="arm64" set "VS_PLATFORM=ARM64"
+if /i "!TARGET_ARCH!"=="x64"   set "VS_PLATFORM=x64"
+if /i "!TARGET_ARCH!"=="x86"   set "VS_PLATFORM=Win32"
+
+:: Map TARGET_ARCH → vcvarsall argument (for Ninja cross-compile)
+if /i "%HOST_ARCH%"=="arm64" (
+    if /i "!TARGET_ARCH!"=="arm64" set "VCVARS_ARCH=arm64"
+    if /i "!TARGET_ARCH!"=="x64"   set "VCVARS_ARCH=arm64_amd64"
+    if /i "!TARGET_ARCH!"=="x86"   set "VCVARS_ARCH=arm64_x86"
+) else (
+    if /i "!TARGET_ARCH!"=="arm64" set "VCVARS_ARCH=amd64_arm64"
+    if /i "!TARGET_ARCH!"=="x64"   set "VCVARS_ARCH=amd64"
+    if /i "!TARGET_ARCH!"=="x86"   set "VCVARS_ARCH=amd64_x86"
+)
 
 ninja --version >nul 2>&1
 if not errorlevel 1 (
@@ -147,10 +209,11 @@ if exist "!VSWHERE!" (
 if defined VS2022_PATH (
     echo  [OK]    Visual Studio 2022 at: !VS2022_PATH!
     set "GENERATOR=Visual Studio 17 2022"
-    set "EXTRA_FLAGS=-A x64"
+    set "EXTRA_FLAGS=-A !VS_PLATFORM!"
 ) else if "!HAS_NINJA!"=="1" (
     echo  [INFO]  VS 2022 not found — using Ninja.
     set "GENERATOR=Ninja"
+    set "USE_NINJA=1"
     set "EXTRA_FLAGS=-DCMAKE_BUILD_TYPE=Release"
 ) else (
     echo  [ERROR] Neither Visual Studio 2022 nor Ninja found.
@@ -220,7 +283,46 @@ echo(
 exit /b 1
 
 :wix_found
-echo  [INFO]  Using WiX version: !WIX_VER!
+echo  [INFO]  Using WiX version : !WIX_VER!
+echo  [INFO]  CMake generator   : !GENERATOR!
+echo(
+
+:: ── For Ninja: locate vcvarsall.bat and activate cross-compile environment ───
+if "!USE_NINJA!"=="1" (
+    set "VCVARS="
+    for %%D in (
+        "!VS2022_PATH!"
+        "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise"
+        "%ProgramFiles%\Microsoft Visual Studio\2022\Professional"
+        "%ProgramFiles%\Microsoft Visual Studio\2022\Community"
+        "%ProgramFiles%\Microsoft Visual Studio\2022\BuildTools"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Enterprise"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Professional"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Community"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\BuildTools"
+    ) do (
+        if exist "%%~D\VC\Auxiliary\Build\vcvarsall.bat" (
+            set "VCVARS=%%~D\VC\Auxiliary\Build\vcvarsall.bat"
+            goto :msi_vcvars_found
+        )
+    )
+    echo  [WARN]  vcvarsall.bat not found — Ninja will use PATH as-is.
+    echo          Cross-compilation may not work correctly.
+    goto :msi_vcvars_skip
+)
+goto :msi_vcvars_skip
+
+:msi_vcvars_found
+echo  [OK]    vcvarsall.bat: !VCVARS!
+echo  [OK]    Activating MSVC environment for: !VCVARS_ARCH!
+call "!VCVARS!" !VCVARS_ARCH!
+if errorlevel 1 (
+    echo  [ERROR] vcvarsall.bat failed for arch: !VCVARS_ARCH!
+    exit /b 1
+)
+echo  [OK]    MSVC environment activated.
+
+:msi_vcvars_skip
 echo(
 
 :: =============================================================================
@@ -257,22 +359,26 @@ if "!REBUILD!"=="1" (
     )
 )
 
-echo  [INFO]  CMake configure...
-cmake -S "%ROOT%" -B "%BUILD%" ^
-    -G "!GENERATOR!" ^
-    !EXTRA_FLAGS! ^
-    -DCMAKE_BUILD_TYPE=Release
+echo  [INFO]  CMake configure (arch: !TARGET_ARCH!)...
+if "!USE_NINJA!"=="1" (
+    cmake -S "%ROOT%" -B "%BUILD%" ^
+        -G "!GENERATOR!" ^
+        -DCMAKE_BUILD_TYPE=Release ^
+        -DCMAKE_SYSTEM_PROCESSOR=!TARGET_ARCH! ^
+        -DCMAKE_SYSTEM_NAME=Windows
+) else (
+    cmake -S "%ROOT%" -B "%BUILD%" ^
+        -G "!GENERATOR!" ^
+        !EXTRA_FLAGS! ^
+        -DCMAKE_BUILD_TYPE=Release
+)
 if errorlevel 1 (
     echo  [ERROR] CMake configuration failed.
     exit /b 1
 )
 
-echo  [INFO]  CMake build (Release)...
-if "!GENERATOR!"=="Ninja" (
-    cmake --build "%BUILD%" --config Release
-) else (
-    cmake --build "%BUILD%" --config Release --parallel
-)
+echo  [INFO]  CMake build (Release, !TARGET_ARCH!)...
+cmake --build "%BUILD%" --config Release --parallel
 if errorlevel 1 (
     echo  [ERROR] Build failed.
     exit /b 1
@@ -288,15 +394,15 @@ echo(
 echo [3/6] Verifying artefacts...
 echo -----------------------------------------------
 
-if not exist "%VST3_SRC%" (
-    echo  [ERROR] VST3 bundle not found:   %VST3_SRC%
+if not exist "!VST3_SRC!" (
+    echo  [ERROR] VST3 bundle not found:   !VST3_SRC!
     echo          Run without --no-build, or pass --rebuild.
     exit /b 1
 )
 echo  [OK]    VST3 bundle:  %VST3_SRC%
 
-if not exist "%EXE_SRC%" (
-    echo  [ERROR] Standalone not found:    %EXE_SRC%
+if not exist "!EXE_SRC!" (
+    echo  [ERROR] Standalone not found:    !EXE_SRC!
     echo          Run without --no-build, or pass --rebuild.
     exit /b 1
 )
