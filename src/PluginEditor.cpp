@@ -38,13 +38,19 @@ FlopsterSlider::FlopsterSlider (const juce::String& pid,
         apvts, paramID, hiddenSlider);
 }
 
-FlopsterSlider::~FlopsterSlider() {}
+FlopsterSlider::~FlopsterSlider()
+{
+    // Ensure the attachment is destroyed (and removes its listener) before
+    // the `hiddenSlider` member is torn down.  This prevents the attachment's
+    // destructor from calling into a slider that's already been destroyed.
+    attachment.reset();
+}
 
 void FlopsterSlider::paint (juce::Graphics& g)
 {
     if (! charSheet.isValid()) return;
 
-    float raw = hiddenSlider.getValue();
+    float raw = (float) hiddenSlider.getValue();
 
     char buf[16] = {};
     auto* param = apvts.getParameter (paramID);
@@ -184,13 +190,12 @@ void PixelKeyboard::buildKeyLabels()
     bool seen[128] = {};
     for (auto& e : entries)
     {
-        if (e.note >= MIDI_START && e.note <= MIDI_END && !seen[e.note])
+        int shiftedNote = e.note + octaveOffset;
+        if (shiftedNote >= MIDI_START && shiftedNote <= MIDI_END && !seen[shiftedNote])
         {
-            seen[e.note] = true;
+            seen[shiftedNote] = true;
             KeyLabel kl;
-            kl.midiNote = e.note;
-            // For notes that appear in both rows, combine labels with "/"
-            // but since we mark seen after first, only first is stored.
+            kl.midiNote = shiftedNote;
             strncpy (kl.label, e.label, sizeof(kl.label) - 1);
             kl.label[sizeof(kl.label) - 1] = '\0';
             keyLabels.push_back (kl);
@@ -408,6 +413,14 @@ void PixelKeyboard::setNoteActive (int midiNote, bool active, int /*velocity*/)
     }
 }
 
+void PixelKeyboard::setOctaveOffset (int semitones)
+{
+    if (octaveOffset == semitones) return;
+    octaveOffset = semitones;
+    buildKeyLabels();
+    if (showLabels) repaint();
+}
+
 void PixelKeyboard::setShowKeyLabels (bool show)
 {
     if (showLabels != show)
@@ -515,7 +528,14 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     presetBox->onChange = [this]
     {
         int id = presetBox->getSelectedId();
-        if (id > 0) processorRef.setCurrentProgram (id - 1);
+        if (id > 0)
+        {
+            processorRef.setCurrentProgram (id - 1);
+            // Immediately update the UI images for the selected preset so the
+            // pixel-art UI reflects the newly chosen pack without waiting for
+            // the audio-thread-safe sample load.
+            loadImagesFromPreset (presetBox->getText());
+        }
     };
     addAndMakeVisible (*presetBox);
 
@@ -528,7 +548,7 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
 #if JUCE_STANDALONE_APPLICATION
     isStandalone = true;
 #else
-    isStandalone = juce::JUCEApplication::isStandaloneApp();
+    isStandalone = false;   // plugin hosts own keyboard input; never intercept
 #endif
 
     // Key labels are only shown in standalone (computer keyboard plays notes).
@@ -586,6 +606,11 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
 
     setSize (totalW, totalH);
 
+    // Load images for the initially selected preset — must be after setSize()
+    // so that resized() finds all child components already constructed.
+    if (presetBox->getSelectedId() > 0)
+        loadImagesFromPreset (presetBox->getText());
+
     startTimerHz (30);
 
     // Register as a global focus listener so we know when the app loses focus
@@ -608,6 +633,120 @@ FlopsterAudioProcessorEditor::~FlopsterAudioProcessorEditor()
 
     if (btnOctaveDown) btnOctaveDown->removeListener (this);
     if (btnOctaveUp)   btnOctaveUp  ->removeListener (this);
+}
+
+//==============================================================================
+// Load images for a given preset (background + character sheet).
+// This runs on the message thread and updates editor visuals immediately.
+void FlopsterAudioProcessorEditor::loadImagesFromPreset (const juce::String& presetName)
+{
+    if (presetName.isEmpty()) return;
+
+    // Locate samples/<presetName> relative to the plugin directory discovered
+    // by the processor.  Must be the message thread.
+    juce::File dir = processorRef.pluginDir.getChildFile ("samples").getChildFile (presetName);
+    if (! dir.isDirectory())
+    {
+        // If the preset folder doesn't exist, try to fall back to assets/ in the
+        // plugin directory (common when running from source tree).
+        dir = processorRef.pluginDir.getChildFile ("assets");
+    }
+
+    // Try several filename variants (bmp, jpg, png) in that order.
+    juce::File bgFiles[] = {
+        dir.getChildFile ("back.bmp"),
+        dir.getChildFile ("back.jpg"),
+        dir.getChildFile ("back.png")
+    };
+    juce::File charFiles[] = {
+        dir.getChildFile ("char.bmp"),
+        dir.getChildFile ("char.png"),
+        dir.getChildFile ("char.jpg")
+    };
+
+    // If not found in samples/<preset>, try top-level assets folder as a last resort.
+    if (! bgFiles[0].existsAsFile() && ! bgFiles[1].existsAsFile() && ! bgFiles[2].existsAsFile())
+    {
+        juce::File assetsDir = processorRef.pluginDir.getChildFile ("assets");
+        if (assetsDir.isDirectory())
+        {
+            bgFiles[0] = assetsDir.getChildFile ("back.bmp");
+            bgFiles[1] = assetsDir.getChildFile ("back.jpg");
+            bgFiles[2] = assetsDir.getChildFile ("back.png");
+        }
+    }
+
+    if (! charFiles[0].existsAsFile() && ! charFiles[1].existsAsFile() && ! charFiles[2].existsAsFile())
+    {
+        juce::File assetsDir = processorRef.pluginDir.getChildFile ("assets");
+        if (assetsDir.isDirectory())
+        {
+            charFiles[0] = assetsDir.getChildFile ("char.bmp");
+            charFiles[1] = assetsDir.getChildFile ("char.png");
+            charFiles[2] = assetsDir.getChildFile ("char.jpg");
+        }
+    }
+
+    // Load first existing background image
+    bgImage = juce::Image();
+    for (auto& f : bgFiles)
+    {
+        if (f.existsAsFile())
+        {
+            bgImage = juce::ImageFileFormat::loadFrom (f);
+            if (bgImage.isValid()) break;
+        }
+    }
+
+    // Load first existing char sheet
+    charImage = juce::Image();
+    for (auto& f : charFiles)
+    {
+        if (f.existsAsFile())
+        {
+            charImage = juce::ImageFileFormat::loadFrom (f);
+            if (charImage.isValid()) break;
+        }
+    }
+
+    // If no char sheet found, fall back to reasonable defaults.
+    if (charImage.isValid())
+    {
+        charW = charImage.getWidth() / 19;
+        charH = charImage.getHeight();
+        if (charW <= 0) charW = 8;
+        if (charH <= 0) charH = 12;
+    }
+    else
+    {
+        charW = 8;
+        charH = 12;
+    }
+
+    // Reflow UI and trigger repaint so changes are visible immediately.
+    resized();
+    repaint();
+}
+
+// Lightweight accessors for testing / tooling / external UI code.
+juce::Image FlopsterAudioProcessorEditor::getBackgroundImage() const
+{
+    return bgImage;
+}
+
+juce::Image FlopsterAudioProcessorEditor::getCharImage() const
+{
+    return charImage;
+}
+
+juce::ComboBox* FlopsterAudioProcessorEditor::getPresetBox() const
+{
+    return presetBox.get();
+}
+
+PixelKeyboard* FlopsterAudioProcessorEditor::getPixelKeyboard() const
+{
+    return pixelKeyboard.get();
 }
 
 //==============================================================================
@@ -692,6 +831,9 @@ void FlopsterAudioProcessorEditor::buttonClicked (juce::Button* btn)
     // Release any currently held notes before the octave changes so they
     // don't get stuck at the old pitch.
     releaseAllKbNotes();
+
+    // Update piano key labels to reflect the new octave
+    pixelKeyboard->setOctaveOffset (kbOctaveOffset);
 
     int octaveNum = kbOctaveOffset / 12;
     lblOctave->setText ("Oct: " + juce::String (octaveNum >= 0 ? "+" : "") + juce::String (octaveNum),
@@ -922,7 +1064,11 @@ void FlopsterAudioProcessorEditor::renderHead (juce::Graphics& g,
 void FlopsterAudioProcessorEditor::paint (juce::Graphics& g)
 {
     const int bgW = bgImage.isValid() ? bgImage.getWidth()  : (getWidth()  / GUI_SCALE);
-    const int bgH = bgImage.isValid() ? bgImage.getHeight() : (getHeight() / GUI_SCALE);
+    // Use the same logical background height fallback as in the constructor:
+    // if there's no background image, assume the original design height (220)
+    // in logical pixels (unscaled). Using getHeight()/GUI_SCALE pushed the
+    // preset/keyb area below the visible window.
+    const int bgH = bgImage.isValid() ? bgImage.getHeight() : (220 / GUI_SCALE);
 
     // --- 1. Draw background scaled (nearest-neighbour for pixel-art look) ---
     if (bgImage.isValid())
@@ -1005,7 +1151,8 @@ void FlopsterAudioProcessorEditor::paint (juce::Graphics& g)
 //==============================================================================
 void FlopsterAudioProcessorEditor::resized()
 {
-    const int bgH = bgImage.isValid() ? bgImage.getHeight() : (getHeight() / GUI_SCALE);
+    // Match the constructor's fallback: logical bg height = 220 when no image.
+    const int bgH = bgImage.isValid() ? bgImage.getHeight() : (220 / GUI_SCALE);
 
     // ---- Sliders: col 29, rows 1..10 of char-cell grid ----
     int sx = 29 * charW * GUI_SCALE;
@@ -1016,23 +1163,23 @@ void FlopsterAudioProcessorEditor::resized()
         return juce::Rectangle<int> (sx, row * sh, sw, sh);
     };
 
-    sliderHeadStep->setBounds (sliderBounds (1));
-    sliderHeadSeek->setBounds (sliderBounds (2));
-    sliderHeadBuzz->setBounds (sliderBounds (3));
-    sliderSpindle ->setBounds (sliderBounds (4));
-    sliderNoises  ->setBounds (sliderBounds (5));
+    if (sliderHeadStep) sliderHeadStep->setBounds (sliderBounds (1));
+    if (sliderHeadSeek) sliderHeadSeek->setBounds (sliderBounds (2));
+    if (sliderHeadBuzz) sliderHeadBuzz->setBounds (sliderBounds (3));
+    if (sliderSpindle)  sliderSpindle ->setBounds (sliderBounds (4));
+    if (sliderNoises)   sliderNoises  ->setBounds (sliderBounds (5));
     // row 6 blank
-    sliderDetune  ->setBounds (sliderBounds (7));
-    sliderOctave  ->setBounds (sliderBounds (8));
+    if (sliderDetune)   sliderDetune  ->setBounds (sliderBounds (7));
+    if (sliderOctave)   sliderOctave  ->setBounds (sliderBounds (8));
     // row 9 blank
-    sliderOutput  ->setBounds (sliderBounds (10));
+    if (sliderOutput)   sliderOutput  ->setBounds (sliderBounds (10));
 
     // ---- Preset bar ----
     int presetBarY = bgH * GUI_SCALE;
     int presetBarH = 28;
 
-    presetLabel->setBounds (4,  presetBarY + 4, 44, presetBarH - 8);
-    presetBox  ->setBounds (50, presetBarY + 2, getWidth() - 54, presetBarH - 4);
+    if (presetLabel) presetLabel->setBounds (4,  presetBarY + 4, 44, presetBarH - 8);
+    if (presetBox)   presetBox  ->setBounds (50, presetBarY + 2, getWidth() - 54, presetBarH - 4);
 
     // ---- Pixel keyboard + octave controls ----
     // Layout: [Oct-btn][Oct-label][Oct+btn] strip at left, then the keyboard
@@ -1046,12 +1193,12 @@ void FlopsterAudioProcessorEditor::resized()
     static constexpr int OCT_LBL_W   = 56;
 
     // Octave strip runs across the top of the keyboard area
-    btnOctaveDown->setBounds (0,               kbY, OCT_BTN_W, OCT_STRIP_H);
-    lblOctave    ->setBounds (OCT_BTN_W,        kbY, OCT_LBL_W, OCT_STRIP_H);
-    btnOctaveUp  ->setBounds (OCT_BTN_W + OCT_LBL_W, kbY, OCT_BTN_W, OCT_STRIP_H);
+    if (btnOctaveDown) btnOctaveDown->setBounds (0,               kbY, OCT_BTN_W, OCT_STRIP_H);
+    if (lblOctave)     lblOctave    ->setBounds (OCT_BTN_W,        kbY, OCT_LBL_W, OCT_STRIP_H);
+    if (btnOctaveUp)   btnOctaveUp  ->setBounds (OCT_BTN_W + OCT_LBL_W, kbY, OCT_BTN_W, OCT_STRIP_H);
 
     // Piano keyboard sits below the strip
-    pixelKeyboard->setBounds (0, kbY + OCT_STRIP_H, getWidth(), kbH - OCT_STRIP_H);
+    if (pixelKeyboard) pixelKeyboard->setBounds (0, kbY + OCT_STRIP_H, getWidth(), kbH - OCT_STRIP_H);
 
     // Credits bar is painted but needs no child widget
 }

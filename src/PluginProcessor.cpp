@@ -348,8 +348,8 @@ float FlopsterAudioProcessor::readSample (const SampleData& s, double pos) const
     if (ptr >= s.length) return 0.0f;
 
     double fr = pos - (double)ptr;
-    double s1 = s.wave[ptr] / 65536.0;
-    double s2 = (ptr + 1 < s.length) ? s.wave[ptr+1] / 65536.0 : s1;
+    double s1 = s.wave[(size_t)ptr] / 65536.0;
+    double s2 = (ptr + 1 < s.length) ? s.wave[(size_t)(ptr+1)] / 65536.0 : s1;
 
     return (float)(s1 + (s2 - s1) * fr);
 }
@@ -379,6 +379,8 @@ void FlopsterAudioProcessor::loadAllSamples()
     samplesReady = false;
     resetPlayer();  // sets FDD.head_sample = nullptr under the lock
 
+    try
+    {
     freeAllSamples();
 
     bool error = false;
@@ -414,6 +416,15 @@ void FlopsterAudioProcessor::loadAllSamples()
     samplesReady         = true;
 
     (void) error; // Non-fatal — some packs may be partial
+    }
+    catch (...)
+    {
+        // If loading fails partway, leave samples in a clean empty state
+        freeAllSamples();
+        currentProgramLoaded = currentProgram;
+        sampleLoadNeeded     = false;
+        samplesReady         = false;
+    }
 }
 
 void FlopsterAudioProcessor::freeAllSamples()
@@ -919,6 +930,8 @@ void FlopsterAudioProcessor::injectMidiNote (int note, int velocity)
 void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                             juce::MidiBuffer& midiMessages)
 {
+    try
+    {
     juce::ScopedNoDenormals noDenormals;
 
     // Merge any MIDI events injected from the GUI thread (on-screen / computer keyboard)
@@ -964,65 +977,59 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     int numSamples = buffer.getNumSamples();
 
-    // Iterate sample-by-sample, firing MIDI events at their exact positions.
-    juce::MidiBuffer::Iterator it (midiMessages);
-    juce::MidiMessage msg;
-    int midiSamplePos = 0;
+    // Process MIDI events for this block (no per-sample accuracy needed for
+    // a floppy-drive synth — eliminates heap allocation on the real-time thread).
+    for (const auto meta : midiMessages)
+    {
+        const juce::MidiMessage& msg = meta.getMessage();
+        MidiEvent ev;
 
-    bool hasMidi = it.getNextEvent (msg, midiSamplePos);
+        if (msg.isNoteOn())
+        {
+            ev.type     = MidiEvent::NoteOn;
+            ev.note     = msg.getNoteNumber();
+            ev.velocity = msg.getVelocity();
+            handleMidiEvent (ev);
+        }
+        else if (msg.isNoteOff())
+        {
+            ev.type = MidiEvent::NoteOff;
+            ev.note = msg.getNoteNumber();
+            handleMidiEvent (ev);
+        }
+        else if (msg.isAllNotesOff() || msg.isAllSoundOff()
+                 || (msg.isController() && msg.getControllerNumber() >= 0x7b))
+        {
+            ev.type = MidiEvent::AllNotesOff;
+            handleMidiEvent (ev);
+        }
+        else if (msg.isPitchWheel())
+        {
+            int wheel = msg.getPitchWheelValue(); // 0..16383, center=8192
+            ev.type = MidiEvent::PitchBend;
+            ev.bend = (float)(wheel - 8192) * midiPitchBendRange / 8192.0f;
+            handleMidiEvent (ev);
+        }
+        else if (msg.isController())
+        {
+            int cc  = msg.getControllerNumber();
+            int val = msg.getControllerValue();
 
+            if (cc == 0x64) midiRPNLsb = val;
+            if (cc == 0x65) midiRPNMsb = val;
+            if (cc == 0x26) midiDataLsb = val;
+            if (cc == 0x06)
+            {
+                midiDataMsb = val;
+                if (midiRPNLsb == 0 && midiRPNMsb == 0)
+                    midiPitchBendRange = (float)midiDataMsb * 0.5f;
+            }
+        }
+    }
+
+    // Render audio sample-by-sample
     for (int s = 0; s < numSamples; ++s)
     {
-        // Fire all MIDI events that land on this sample
-        while (hasMidi && midiSamplePos <= s)
-        {
-            MidiEvent ev;
-
-            if (msg.isNoteOn())
-            {
-                ev.type     = MidiEvent::NoteOn;
-                ev.note     = msg.getNoteNumber();
-                ev.velocity = msg.getVelocity();
-                handleMidiEvent (ev);
-            }
-            else if (msg.isNoteOff())
-            {
-                ev.type = MidiEvent::NoteOff;
-                ev.note = msg.getNoteNumber();
-                handleMidiEvent (ev);
-            }
-            else if (msg.isAllNotesOff() || msg.isAllSoundOff()
-                     || (msg.isController() && msg.getControllerNumber() >= 0x7b))
-            {
-                ev.type = MidiEvent::AllNotesOff;
-                handleMidiEvent (ev);
-            }
-            else if (msg.isPitchWheel())
-            {
-                int wheel = msg.getPitchWheelValue(); // 0..16383, center=8192
-                ev.type = MidiEvent::PitchBend;
-                ev.bend = (float)(wheel - 8192) * midiPitchBendRange / 8192.0f;
-                handleMidiEvent (ev);
-            }
-            else if (msg.isController())
-            {
-                int cc  = msg.getControllerNumber();
-                int val = msg.getControllerValue();
-
-                if (cc == 0x64) midiRPNLsb = val;
-                if (cc == 0x65) midiRPNMsb = val;
-                if (cc == 0x26) midiDataLsb = val;
-                if (cc == 0x06)
-                {
-                    midiDataMsb = val;
-                    if (midiRPNLsb == 0 && midiRPNMsb == 0)
-                        midiPitchBendRange = (float)midiDataMsb * 0.5f;
-                }
-            }
-
-            hasMidi = it.getNextEvent (msg, midiSamplePos);
-        }
-
         // Low-frequency step trigger
         FDD.low_freq_acc += FDD.low_freq_add;
         if (FDD.low_freq_acc >= 1.0f)
@@ -1042,6 +1049,11 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     {
         guiNeedsUpdate = true;
         FDD.head_pos_prev = FDD.head_pos;
+    }
+    }
+    catch (...)
+    {
+        buffer.clear();  // output silence rather than garbage or crashing the host
     }
 }
 

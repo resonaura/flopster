@@ -114,6 +114,7 @@ if [ "$REBUILD" -eq 1 ] || [ ! -f "$ARTEFACT_BINARY" ]; then
     cmake -S "$SCRIPT_DIR" -B "$BUILD" \
         -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
         "-DCMAKE_C_COMPILER=$CC" \
         "-DCMAKE_CXX_COMPILER=$CXX" \
         2>&1 | sed 's/^/    /' \
@@ -125,6 +126,11 @@ if [ "$REBUILD" -eq 1 ] || [ ! -f "$ARTEFACT_BINARY" ]; then
         2>&1 | grep -E "^\[|error:|Linking" \
         || die "Build failed. Run  ninja -C $BUILD  for full output."
     ok "Build succeeded."
+    # Restore compile_commands.json symlink at repo root (wiped by --rebuild)
+    if [ -f "$BUILD/compile_commands.json" ]; then
+        ln -sf "build/compile_commands.json" "$SCRIPT_DIR/compile_commands.json"
+        ok "compile_commands.json symlink restored."
+    fi
 else
     ok "Release artefacts already present — skipping build.  (Pass --rebuild to force.)"
 fi

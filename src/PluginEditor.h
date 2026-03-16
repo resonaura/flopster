@@ -42,8 +42,8 @@ private:
     int   dragStartY   = 0;
     float dragStartValue = 0.0f;
 
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     juce::Slider hiddenSlider;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FlopsterSlider)
 };
@@ -75,6 +75,7 @@ public:
 
     // Whether to render key-label letters (only in standalone mode)
     void setShowKeyLabels (bool show);
+    void setOctaveOffset(int semitones);
 
 private:
     // ---- layout helpers -------------------------------------------------------
@@ -104,6 +105,7 @@ private:
 
     // Show key labels (letters) for standalone mode
     bool showLabels = false;
+    int octaveOffset = 0;
 
     // Cached layout (recomputed in resized())
     float whiteKeyW  = 0.0f;
@@ -138,6 +140,18 @@ class FlopsterAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public juce::Button::Listener
 {
 public:
+    // Load images (background + character sheet) for a given preset name.
+    // This is intended to be called from the message thread (editor/UI code)
+    // when the user selects a different preset so the UI can update immediately.
+    void loadImagesFromPreset (const juce::String& presetName);
+
+    // Lightweight accessors so external code (tests / tooling / wrappers) can
+    // query key UI pieces without exposing internals directly.
+    juce::Image getBackgroundImage() const;
+    juce::Image getCharImage() const;
+    juce::ComboBox* getPresetBox() const;
+    PixelKeyboard* getPixelKeyboard() const;
+
     FlopsterAudioProcessorEditor (FlopsterAudioProcessor&);
     ~FlopsterAudioProcessorEditor() override;
 
@@ -248,10 +262,5 @@ private:
     std::map<int, int> heldKbShiftedNotes; // rawNote  -> shiftedNote
 
     //==========================================================================
-    int  lastHeadPos    = -1;
-    int  lastSampleType = -1;
-    bool lastSpindle    = false;
-    bool lastLoopDone   = false;
-
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FlopsterAudioProcessorEditor)
 };

@@ -89,3 +89,6 @@ x86/
 *.p12
 *.cer
 *.provisionprofile
+compile_commands.json
+
+.cache

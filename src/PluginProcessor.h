@@ -2,9 +2,7 @@
 
 #include <JuceHeader.h>
 #include <vector>
-#include <cmath>
 #include <cstring>
-#include <cstdio>
 
 //==============================================================================
 #define PLUGIN_NAME             "Flopster"
