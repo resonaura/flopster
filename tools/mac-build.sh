@@ -7,8 +7,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_RELEASE="$SCRIPT_DIR/build"
-BUILD_DEBUG="$SCRIPT_DIR/build-debug"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BUILD_RELEASE="$ROOT/build"
+BUILD_DEBUG="$ROOT/build-debug"
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -79,14 +80,14 @@ if ! command -v ninja &>/dev/null; then
 fi
 ok "ninja: $(ninja --version)"
 
-if [ ! -d "$SCRIPT_DIR/JUCE/modules" ]; then
+if [ ! -d "$ROOT/JUCE/modules" ]; then
   warn "JUCE not found — cloning JUCE 8.0.7…"
   git clone --depth 1 --branch 8.0.7 \
-    https://github.com/juce-framework/JUCE.git "$SCRIPT_DIR/JUCE" \
+    https://github.com/juce-framework/JUCE.git "$ROOT/JUCE" \
     || die "Failed to clone JUCE"
   ok "JUCE cloned"
 else
-  ok "JUCE: $SCRIPT_DIR/JUCE"
+  ok "JUCE: $ROOT/JUCE"
 fi
 
 CC=$(xcrun --find clang   2>/dev/null || echo clang)
@@ -105,7 +106,7 @@ fi
 if [ ! -f "$BUILD_DIR/build.ninja" ]; then
   info "🔧 Configuring with CMake…"
   mkdir -p "$BUILD_DIR"
-  cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" \
+  cmake -S "$ROOT" -B "$BUILD_DIR" \
     -G Ninja \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DCMAKE_C_COMPILER="$CC" \
@@ -151,5 +152,5 @@ echo -e "  VST3      →  ${BOLD}${BASE}/VST3/Flopster.vst3${NC}"
 echo -e "  AU        →  ${BOLD}${BASE}/AU/Flopster.component${NC}"
 echo -e "  Standalone→  ${BOLD}${BASE}/Standalone/Flopster.app${NC}"
 echo ""
-echo -e "  Run ${BOLD}./install.sh${NC} to install into the system."
+echo -e "  Run ${BOLD}./tools/mac-install.sh${NC} to install into the system."
 echo ""

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Flopster VERSION 1.24)
+project(Flopster VERSION 1.25)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,6 +20,16 @@ elseif(WIN32)
     set(FLOPSTER_FORMATS VST3 Standalone)
 else()
     set(FLOPSTER_FORMATS VST3 Standalone)
+
+    # Linux: find required system packages
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(WEBKIT2GTK webkit2gtk-4.1 QUIET)
+    if(NOT WEBKIT2GTK_FOUND)
+        pkg_check_modules(WEBKIT2GTK webkit2gtk-4.0 REQUIRED)
+    endif()
+    pkg_check_modules(ALSA REQUIRED alsa)
+    pkg_check_modules(FREETYPE REQUIRED freetype2)
+    pkg_check_modules(FONTCONFIG REQUIRED fontconfig)
 endif()
 
 # ── Icons ─────────────────────────────────────────────────────────────────────
@@ -29,7 +39,7 @@ set(FLOPSTER_ICON_PNG "${CMAKE_CURRENT_SOURCE_DIR}/assets/app.png")
 
 # ── Plugin target ─────────────────────────────────────────────────────────────
 juce_add_plugin(Flopster
-    VERSION                     "1.24"
+    VERSION                     "1.25"
     COMPANY_NAME                "Shiru & Resonaura"
     COMPANY_WEBSITE             "http://shiru.untergrund.net"
     PLUGIN_MANUFACTURER_CODE    Shru
@@ -79,6 +89,7 @@ target_compile_definitions(Flopster
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_MODAL_LOOPS_PERMITTED=1
+        JUCE_USE_OPENGL=1
 )
 
 # ── Link libraries ────────────────────────────────────────────────────────────
@@ -91,6 +102,7 @@ target_link_libraries(Flopster
         juce::juce_gui_extra
         juce::juce_events
         juce::juce_core
+        juce::juce_opengl
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -106,7 +118,27 @@ if(WIN32)
     )
 endif()
 
+
+# ── Linux: link system libraries ─────────────────────────────────────────────
+if(UNIX AND NOT APPLE)
+    target_link_libraries(Flopster
+        PRIVATE
+            ${WEBKIT2GTK_LIBRARIES}
+            ${ALSA_LIBRARIES}
+            ${FREETYPE_LIBRARIES}
+            ${FONTCONFIG_LIBRARIES}
+            dl pthread
+    )
+    target_include_directories(Flopster
+        PRIVATE
+            ${WEBKIT2GTK_INCLUDE_DIRS}
+            ${ALSA_INCLUDE_DIRS}
+            ${FREETYPE_INCLUDE_DIRS}
+            ${FONTCONFIG_INCLUDE_DIRS}
+    )
+endif()
+
 # NOTE: Resource files (back.bmp, char.bmp, samples/) are copied into plugin
-# bundles by install.sh (macOS) / install.bat (Windows) after the build, rather
-# than as CMake post-build steps, to avoid conflicting with JUCE's own bundle
-# code-signing step.
+# bundles by install.sh (macOS) / install.bat (Windows) / install_linux.sh
+# after the build, rather than as CMake post-build steps, to avoid conflicting
+# with JUCE's own bundle code-signing step.

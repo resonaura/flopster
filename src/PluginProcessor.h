@@ -197,6 +197,10 @@ public:
     // Default: true.  Toggled by the Norm button in the editor.
     bool normalizeSamples { true };
 
+    // Set by the editor when normalizeSamples is toggled so loadAllSamples()
+    // knows to re-run even if currentProgramLoaded == currentProgram.
+    std::atomic<bool> normReloadNeeded { false };
+
     // Exposed so the editor can force a reload when normalizeSamples changes.
     int currentProgramLoaded { -1 };
 

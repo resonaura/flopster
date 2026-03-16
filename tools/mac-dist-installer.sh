@@ -14,8 +14,6 @@ VST3_SRC="$SCRIPT_DIR/Flopster.vst3"
 AU_SRC="$SCRIPT_DIR/Flopster.component"
 APP_SRC="$SCRIPT_DIR/Flopster.app"
 
-ASSETS_BACK="$SCRIPT_DIR/back.bmp"
-ASSETS_CHAR="$SCRIPT_DIR/char.bmp"
 SAMPLES_SRC="$SCRIPT_DIR/samples"
 
 VST3_DST="$HOME/Library/Audio/Plug-Ins/VST3/Flopster.vst3"
@@ -66,15 +64,11 @@ ruler
 [ -d "$VST3_SRC" ] || { echo -e "${RED}  ❌  Flopster.vst3 not found next to this script.${NC}" >&2; exit 1; }
 [ -d "$AU_SRC"   ] || { echo -e "${RED}  ❌  Flopster.component not found next to this script.${NC}" >&2; exit 1; }
 [ -d "$APP_SRC"  ] || { echo -e "${RED}  ❌  Flopster.app not found next to this script.${NC}" >&2; exit 1; }
-[ -f "$ASSETS_BACK" ] || { echo -e "${RED}  ❌  back.bmp not found next to this script.${NC}" >&2; exit 1; }
-[ -f "$ASSETS_CHAR" ] || { echo -e "${RED}  ❌  char.bmp not found next to this script.${NC}" >&2; exit 1; }
 [ -d "$SAMPLES_SRC" ] || { echo -e "${RED}  ❌  samples/ directory not found next to this script.${NC}" >&2; exit 1; }
 
 ok "Flopster.vst3 found"
 ok "Flopster.component found"
 ok "Flopster.app found"
-ok "back.bmp found"
-ok "char.bmp found"
 ok "samples/ found"
 
 # ── Strip quarantine from source files ────────────────────────────────────────
@@ -154,12 +148,11 @@ if [ "$IS_UPDATE" -eq 1 ]; then
 fi
 
 # ── Resources copy helper ─────────────────────────────────────────────────────
-# copy_resources <dest_dir>  — copies back.bmp, char.bmp, samples/ into a bundle
+# copy_resources <dest_dir>  — copies samples/ into a bundle
 copy_resources() {
     local dest="$1"
     mkdir -p "$dest"
-    cp "$ASSETS_BACK" "$dest/"
-    cp "$ASSETS_CHAR" "$dest/"
+    [[ -f "$SCRIPT_DIR/scanlines.png" ]] && cp "$SCRIPT_DIR/scanlines.png" "$dest/"
     sudo rm -rf "$dest/samples"
     cp -R "$SAMPLES_SRC" "$dest/samples"
 }
@@ -226,8 +219,6 @@ copy_resources "$APP_DST/Contents/Resources"
 ok "Resources copied into Standalone bundle (Resources/)"
 
 mkdir -p "$APP_DST/Contents/MacOS"
-cp "$ASSETS_BACK" "$APP_DST/Contents/MacOS/"
-cp "$ASSETS_CHAR" "$APP_DST/Contents/MacOS/"
 sudo rm -rf "$APP_DST/Contents/MacOS/samples"
 cp -R "$SAMPLES_SRC" "$APP_DST/Contents/MacOS/samples"
 ok "Resources copied into Standalone bundle (MacOS/ fallback)"

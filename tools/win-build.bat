@@ -10,13 +10,13 @@ chcp 65001 >nul 2>&1
 
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-set "ROOT=%SCRIPT_DIR%\.."
-set "BUILD_RELEASE=%SCRIPT_DIR%\build"
-set "BUILD_DEBUG=%SCRIPT_DIR%\build-debug"
+for %%I in ("%SCRIPT_DIR%\..") do set "ROOT=%%~fI"
+set "BUILD_RELEASE=%ROOT%\build"
+set "BUILD_DEBUG=%ROOT%\build-debug"
 set "BUILD_TYPE=Release"
 set "BUILD_DIR=%BUILD_RELEASE%"
 set "REBUILD=0"
-set "JUCE_DIR=%SCRIPT_DIR%\JUCE"
+set "JUCE_DIR=%ROOT%\JUCE"
 
 :: ── Parse arguments ───────────────────────────────────────────────────────────
 :parse_args
@@ -154,7 +154,7 @@ if "%NEED_CONFIGURE%"=="1" (
 
     if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 
-    cmake -S "%SCRIPT_DIR%" -B "%BUILD_DIR%" ^
+    cmake -S "%ROOT%" -B "%BUILD_DIR%" ^
         -G "%GENERATOR%" %EXTRA_ARGS% ^
         -DCMAKE_BUILD_TYPE=%BUILD_TYPE%
 

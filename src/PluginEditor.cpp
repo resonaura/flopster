@@ -572,9 +572,9 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     {
         processorRef.normalizeSamples = ! processorRef.normalizeSamples;
         btnNormalize->setButtonText (processorRef.normalizeSamples ? "Norm: ON" : "Norm: OFF");
-        // Force sample reload with new normalization setting
-        processorRef.currentProgramLoaded = -1;
-        processorRef.sampleLoadNeeded     = true;
+        // Signal loadAllSamples() to re-run even though the program hasn't changed
+        processorRef.normReloadNeeded = true;
+        processorRef.sampleLoadNeeded = true;
     };
     addAndMakeVisible (*btnNormalize);
 
@@ -621,11 +621,18 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     // with the deferred pattern used for preset changes).
     if (processorRef.sampleLoadNeeded.load())
         processorRef.loadAllSamples();
+
+    // -------------------------------------------------------------------------
+    // Attach the CRT image-effect filter.  JUCE calls applyEffect() on the
+    // fully-rendered component image (after all children have painted), so CA,
+    // grain, and glow are applied to the real pixel content.
+    setComponentEffect (&m_crtEffect);
 }
 
 FlopsterAudioProcessorEditor::~FlopsterAudioProcessorEditor()
 {
     stopTimer();
+    setComponentEffect (nullptr);
     juce::Desktop::getInstance().removeFocusChangeListener (this);
     releaseAllKbNotes();
 
@@ -1086,6 +1093,9 @@ void FlopsterAudioProcessorEditor::timerCallback()
     processorRef.meterR.store (processorRef.meterR.load() * 0.82f);
 
     processorRef.guiNeedsUpdate.exchange (false);
+
+    // Advance grain frame counter and push to the effect before repainting
+    m_crtEffect.setFrame (++m_frameCount);
     repaint();
 
     sliderHeadStep->refreshValue();
@@ -1324,6 +1334,9 @@ void FlopsterAudioProcessorEditor::applyTheme (int programIndex)
     // ── Keyboard ──────────────────────────────────────────────────────────────
     if (pixelKeyboard)
         pixelKeyboard->setThemeColors (t.bg, t.bgDark, t.accent, t.lit);
+
+    // Update the CRT effect accent colour so glow tints match the theme.
+    m_crtEffect.setAccent (t.accent);
 
     repaint();
 }

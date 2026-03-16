@@ -386,7 +386,7 @@ void FlopsterAudioProcessor::loadAllSamples()
     // cannot touch the sample arrays while they are being rebuilt.
     juce::ScopedLock sl (samplesLock);
 
-    if (currentProgramLoaded == currentProgram) return;
+    if (currentProgramLoaded == currentProgram && !normReloadNeeded.exchange(false)) return;
 
     juce::String presetName = programNames[currentProgram];
     if (presetName == "empty")
@@ -1015,133 +1015,141 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     buffer.clear();
 
     // If samples are not ready yet (e.g. loading in progress on the message
-    // thread), output silence for this block and return immediately.
+    // thread), output silence for this block and skip rendering.
     // We use tryEnter so we NEVER block the real-time thread; if the message
     // thread is currently loading samples we skip this block safely.
-    if (! samplesLock.tryEnter())
-        return;
-
-    // samplesLock is now held — release it via RAII at end of scope.
-    struct SamplesLockGuard
+    // Note: the VU meter update still runs below even when the lock fails,
+    // so the meters always reflect what is actually in the buffer (silence).
+    if (samplesLock.tryEnter())
     {
-        juce::CriticalSection& cs;
-        SamplesLockGuard (juce::CriticalSection& c) : cs (c) {}
-        ~SamplesLockGuard() { cs.exit(); }
-    } samplesGuard (samplesLock);
-
-    // If a sample reload was requested from the message thread (preset change
-    // via setCurrentProgram) but not yet picked up, update the internal flag
-    // so the editor timer sees it on the next tick.
-    // NOTE: We do NOT call loadAllSamples() here because file I/O on the
-    // real-time thread would cause glitches / host crashes.
-    if (currentProgramLoaded != currentProgram)
-        sampleLoadNeeded = true;
-
-    updatePitch();
-
-    float* outL = buffer.getWritePointer (0);
-    float* outR = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
-
-    int numSamples = buffer.getNumSamples();
-
-    // Process MIDI events for this block (no per-sample accuracy needed for
-    // a floppy-drive synth — eliminates heap allocation on the real-time thread).
-    for (const auto meta : midiMessages)
-    {
-        const juce::MidiMessage& msg = meta.getMessage();
-        MidiEvent ev;
-
-        if (msg.isNoteOn())
+        // samplesLock is now held — release it via RAII at end of scope.
+        struct SamplesLockGuard
         {
-            ev.type     = MidiEvent::NoteOn;
-            ev.note     = msg.getNoteNumber();
-            ev.velocity = msg.getVelocity();
-            handleMidiEvent (ev);
-        }
-        else if (msg.isNoteOff())
-        {
-            ev.type = MidiEvent::NoteOff;
-            ev.note = msg.getNoteNumber();
-            handleMidiEvent (ev);
-        }
-        else if (msg.isAllNotesOff() || msg.isAllSoundOff()
-                 || (msg.isController() && msg.getControllerNumber() >= 0x7b))
-        {
-            ev.type = MidiEvent::AllNotesOff;
-            handleMidiEvent (ev);
-        }
-        else if (msg.isPitchWheel())
-        {
-            int wheel = msg.getPitchWheelValue(); // 0..16383, center=8192
-            ev.type = MidiEvent::PitchBend;
-            ev.bend = (float)(wheel - 8192) * midiPitchBendRange / 8192.0f;
-            handleMidiEvent (ev);
-        }
-        else if (msg.isController())
-        {
-            int cc  = msg.getControllerNumber();
-            int val = msg.getControllerValue();
+            juce::CriticalSection& cs;
+            SamplesLockGuard (juce::CriticalSection& c) : cs (c) {}
+            ~SamplesLockGuard() { cs.exit(); }
+        } samplesGuard (samplesLock);
 
-            if (cc == 0x64) midiRPNLsb = val;
-            if (cc == 0x65) midiRPNMsb = val;
-            if (cc == 0x26) midiDataLsb = val;
-            if (cc == 0x06)
+        // If a sample reload was requested from the message thread (preset change
+        // via setCurrentProgram) but not yet picked up, update the internal flag
+        // so the editor timer sees it on the next tick.
+        // NOTE: We do NOT call loadAllSamples() here because file I/O on the
+        // real-time thread would cause glitches / host crashes.
+        if (currentProgramLoaded != currentProgram)
+            sampleLoadNeeded = true;
+
+        updatePitch();
+
+        float* outL = buffer.getWritePointer (0);
+        float* outR = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
+
+        int numSamples = buffer.getNumSamples();
+
+        // Process MIDI events for this block (no per-sample accuracy needed for
+        // a floppy-drive synth — eliminates heap allocation on the real-time thread).
+        for (const auto meta : midiMessages)
+        {
+            const juce::MidiMessage& msg = meta.getMessage();
+            MidiEvent ev;
+
+            if (msg.isNoteOn())
             {
-                midiDataMsb = val;
-                if (midiRPNLsb == 0 && midiRPNMsb == 0)
-                    midiPitchBendRange = (float)midiDataMsb * 0.5f;
+                ev.type     = MidiEvent::NoteOn;
+                ev.note     = msg.getNoteNumber();
+                ev.velocity = msg.getVelocity();
+                handleMidiEvent (ev);
+            }
+            else if (msg.isNoteOff())
+            {
+                ev.type = MidiEvent::NoteOff;
+                ev.note = msg.getNoteNumber();
+                handleMidiEvent (ev);
+            }
+            else if (msg.isAllNotesOff() || msg.isAllSoundOff()
+                     || (msg.isController() && msg.getControllerNumber() >= 0x7b))
+            {
+                ev.type = MidiEvent::AllNotesOff;
+                handleMidiEvent (ev);
+            }
+            else if (msg.isPitchWheel())
+            {
+                int wheel = msg.getPitchWheelValue(); // 0..16383, center=8192
+                ev.type = MidiEvent::PitchBend;
+                ev.bend = (float)(wheel - 8192) * midiPitchBendRange / 8192.0f;
+                handleMidiEvent (ev);
+            }
+            else if (msg.isController())
+            {
+                int cc  = msg.getControllerNumber();
+                int val = msg.getControllerValue();
+
+                if (cc == 0x64) midiRPNLsb = val;
+                if (cc == 0x65) midiRPNMsb = val;
+                if (cc == 0x26) midiDataLsb = val;
+                if (cc == 0x06)
+                {
+                    midiDataMsb = val;
+                    if (midiRPNLsb == 0 && midiRPNMsb == 0)
+                        midiPitchBendRange = (float)midiDataMsb * 0.5f;
+                }
             }
         }
-    }
 
-    // Render audio sample-by-sample across all active voices
-    const float voiceScale = 1.0f / (float)numVoices;
-    for (int s = 0; s < numSamples; ++s)
-    {
-        float mixed = 0.0f;
-        for (int v = 0; v < numVoices; ++v)
-        {
-            FDDState& fdd = FDD[v];
-
-            // Low-frequency step trigger per voice
-            fdd.low_freq_acc += fdd.low_freq_add;
-            if (fdd.low_freq_acc >= 1.0f)
-            {
-                while (fdd.low_freq_acc >= 1.0f) fdd.low_freq_acc -= 1.0f;
-                floppyStep (fdd, -1);
-            }
-
-            mixed += renderOneSample (fdd);
-        }
-
-        mixed *= voiceScale;
-        outL[s] = mixed;
-        if (outR) outR[s] = mixed;
-    }
-
-    // Update head_pos_prev for GUI (track display voice)
-    {
-        FDDState& dfdd = FDD[displayVoice];
-        if (dfdd.head_pos_prev != dfdd.head_pos)
-        {
-            guiNeedsUpdate = true;
-            dfdd.head_pos_prev = dfdd.head_pos;
-        }
-    }
-
-    // Update VU meters (raise-only; editor timer applies decay)
-    {
-        float pkL = 0.0f, pkR = 0.0f;
+        // Render audio sample-by-sample across all active voices
+        const float voiceScale = 1.0f / (float)numVoices;
         for (int s = 0; s < numSamples; ++s)
         {
-            float v = std::abs (outL[s]);
+            float mixed = 0.0f;
+            for (int v = 0; v < numVoices; ++v)
+            {
+                FDDState& fdd = FDD[v];
+
+                // Low-frequency step trigger per voice
+                fdd.low_freq_acc += fdd.low_freq_add;
+                if (fdd.low_freq_acc >= 1.0f)
+                {
+                    while (fdd.low_freq_acc >= 1.0f) fdd.low_freq_acc -= 1.0f;
+                    floppyStep (fdd, -1);
+                }
+
+                mixed += renderOneSample (fdd);
+            }
+
+            mixed *= voiceScale;
+            outL[s] = mixed;
+            if (outR) outR[s] = mixed;
+        }
+
+        // Update head_pos_prev for GUI (track display voice)
+        {
+            FDDState& dfdd = FDD[displayVoice];
+            if (dfdd.head_pos_prev != dfdd.head_pos)
+            {
+                guiNeedsUpdate = true;
+                dfdd.head_pos_prev = dfdd.head_pos;
+            }
+        }
+
+    } // samplesGuard releases samplesLock here
+
+    // Update VU meters unconditionally (raise-only; editor timer applies decay).
+    // Runs even when samplesLock.tryEnter() failed (buffer is silence in that case).
+    {
+        const float* rdL = buffer.getReadPointer (0);
+        const float* rdR = buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : nullptr;
+        const int numSamples = buffer.getNumSamples();
+
+        float pkL = 0.f, pkR = 0.f;
+        for (int s = 0; s < numSamples; ++s)
+        {
+            float v = std::abs (rdL[s]);
             if (v > pkL) pkL = v;
         }
-        if (outR)
+        if (rdR)
         {
             for (int s = 0; s < numSamples; ++s)
             {
-                float v = std::abs (outR[s]);
+                float v = std::abs (rdR[s]);
                 if (v > pkR) pkR = v;
             }
         }

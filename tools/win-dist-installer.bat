@@ -14,8 +14,7 @@ if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 
 set "VST3_SRC=%SCRIPT_DIR%\Flopster.vst3"
 set "EXE_SRC=%SCRIPT_DIR%\Flopster.exe"
-set "BACK_BMP=%SCRIPT_DIR%\back.bmp"
-set "CHAR_BMP=%SCRIPT_DIR%\char.bmp"
+
 set "SAMPLES_SRC=%SCRIPT_DIR%\samples"
 
 set "VST3_DST1=%CommonProgramFiles%\VST3\Flopster.vst3"
@@ -57,17 +56,7 @@ if not exist "%EXE_SRC%" (
 )
 echo  [OK]    Flopster.exe found.
 
-if not exist "%BACK_BMP%" (
-    echo  [ERROR] back.bmp not found next to this script.
-    goto :fail_norestore
-)
-echo  [OK]    back.bmp found.
 
-if not exist "%CHAR_BMP%" (
-    echo  [ERROR] char.bmp not found next to this script.
-    goto :fail_norestore
-)
-echo  [OK]    char.bmp found.
 
 if not exist "%SAMPLES_SRC%" (
     echo  [ERROR] samples\ directory not found next to this script.
@@ -188,8 +177,7 @@ if errorlevel 1 (
 echo  [OK]    Standalone installed: %APP_DST%
 
 :: Copy resources into Standalone dir
-copy /y "%BACK_BMP%" "%APP_DIR%\" >nul
-copy /y "%CHAR_BMP%" "%APP_DIR%\" >nul
+if exist "%SCRIPT_DIR%\scanlines.png" copy /y "%SCRIPT_DIR%\scanlines.png" "%APP_DIR%\" >nul
 if exist "%APP_DIR%\samples" rmdir /s /q "%APP_DIR%\samples"
 xcopy /e /i /q /y "%SAMPLES_SRC%" "%APP_DIR%\samples\" >nul
 echo  [OK]    Resources copied into Standalone directory.
@@ -276,8 +264,7 @@ echo  [OK]    VST3 installed ^(%LBL%^): %DST%
 :: Copy resources into VST3 bundle Resources\
 set "RES=%DST%\Contents\Resources"
 if not exist "%RES%" mkdir "%RES%"
-copy /y "%BACK_BMP%" "%RES%\" >nul
-copy /y "%CHAR_BMP%" "%RES%\" >nul
+if exist "%SCRIPT_DIR%\scanlines.png" copy /y "%SCRIPT_DIR%\scanlines.png" "%RES%\" >nul
 if exist "%RES%\samples" rmdir /s /q "%RES%\samples"
 xcopy /e /i /q /y "%SAMPLES_SRC%" "%RES%\samples\" >nul
 echo  [OK]    Resources copied into VST3 bundle ^(%LBL%^).
