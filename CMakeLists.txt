@@ -1,0 +1,112 @@
+cmake_minimum_required(VERSION 3.22)
+project(Flopster VERSION 1.21)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ── Deployment target ─────────────────────────────────────────────────────────
+# Explicitly set to avoid inheriting a beta SDK's minos (e.g. 26.0 from Xcode beta)
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS version" FORCE)
+endif()
+
+# ── JUCE ──────────────────────────────────────────────────────────────────────
+add_subdirectory(JUCE JUCE_build)
+
+# ── Platform-specific plugin formats ─────────────────────────────────────────
+if(APPLE)
+    set(FLOPSTER_FORMATS VST3 AU Standalone)
+elseif(WIN32)
+    set(FLOPSTER_FORMATS VST3 Standalone)
+else()
+    set(FLOPSTER_FORMATS VST3 Standalone)
+endif()
+
+# ── Icons ─────────────────────────────────────────────────────────────────────
+# juceaide accepts only PNG as input and converts to .icns / .ico itself.
+# Passing a pre-built .icns produces a corrupt 8-byte stub.
+set(FLOPSTER_ICON_PNG "${CMAKE_CURRENT_SOURCE_DIR}/assets/app.png")
+
+# ── Plugin target ─────────────────────────────────────────────────────────────
+juce_add_plugin(Flopster
+    VERSION                     "1.21"
+    COMPANY_NAME                "Shiru & Resonaura"
+    COMPANY_WEBSITE             "http://shiru.untergrund.net"
+    PLUGIN_MANUFACTURER_CODE    Shru
+    PLUGIN_CODE                 Flps
+    FORMATS                     ${FLOPSTER_FORMATS}
+    PRODUCT_NAME                "Flopster"
+    DESCRIPTION                 "Floppy drive instrument by Shiru & Resonaura"
+    IS_SYNTH                    TRUE
+    NEEDS_MIDI_INPUT            TRUE
+    NEEDS_MIDI_OUTPUT           FALSE
+    IS_MIDI_EFFECT              FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    COPY_PLUGIN_AFTER_BUILD     FALSE
+
+    # Icons — PNG source; juceaide converts to .icns (macOS) or .ico (Windows)
+    ICON_BIG                    "${FLOPSTER_ICON_PNG}"
+    ICON_SMALL                  "${FLOPSTER_ICON_PNG}"
+
+    # AU-specific
+    AU_MAIN_TYPE                kAudioUnitType_MusicDevice
+    AU_EXPORT_PREFIX            FlopsterAU
+
+    # Bundle / app identifiers
+    BUNDLE_ID                   com.shiru.flopster
+    PLUGIN_AU_EXPORT_PREFIX     FlopsterAU
+)
+
+juce_generate_juce_header(Flopster)
+
+# ── Sources ───────────────────────────────────────────────────────────────────
+target_sources(Flopster
+    PRIVATE
+        src/PluginProcessor.cpp
+        src/PluginEditor.cpp
+)
+
+target_include_directories(Flopster
+    PRIVATE
+        src
+)
+
+# ── Compile definitions ───────────────────────────────────────────────────────
+target_compile_definitions(Flopster
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        JUCE_DISPLAY_SPLASH_SCREEN=0
+        JUCE_MODAL_LOOPS_PERMITTED=1
+)
+
+# ── Link libraries ────────────────────────────────────────────────────────────
+target_link_libraries(Flopster
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_audio_processors
+        juce::juce_audio_plugin_client
+        juce::juce_gui_basics
+        juce::juce_gui_extra
+        juce::juce_events
+        juce::juce_core
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
+
+# ── Windows: suppress CRT warnings ───────────────────────────────────────────
+if(WIN32)
+    target_compile_definitions(Flopster
+        PRIVATE
+            _CRT_SECURE_NO_WARNINGS
+            _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
+    )
+endif()
+
+# NOTE: Resource files (back.bmp, char.bmp, samples/) are copied into plugin
+# bundles by install.sh (macOS) / install.bat (Windows) after the build, rather
+# than as CMake post-build steps, to avoid conflicting with JUCE's own bundle
+# code-signing step.

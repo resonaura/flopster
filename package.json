@@ -1,0 +1,41 @@
+{
+  "name": "flopster",
+  "version": "1.21.0",
+  "description": "Floppy drive instrument plugin by Shiru & Resonaura",
+  "private": true,
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js",
+    "build": "node scripts/run.js build",
+    "build:release": "node scripts/run.js build --release",
+    "build:debug": "node scripts/run.js build --debug",
+    "rebuild": "node scripts/run.js build --rebuild",
+    "rebuild:debug": "node scripts/run.js build --debug --rebuild",
+    "install:plugin": "node scripts/run.js install",
+    "reinstall": "node scripts/run.js install --rebuild",
+    "dist": "node scripts/dist.js --all",
+    "dist:mac": "node scripts/dist.js --mac",
+    "dist:win": "node scripts/dist.js --win",
+    "clean": "node -e \"require('fs').rmSync('build',{recursive:true,force:true}); require('fs').rmSync('build-debug',{recursive:true,force:true});\"",
+    "mac:build": "bash build.sh",
+    "mac:build:release": "bash build.sh --release",
+    "mac:build:debug": "bash build.sh --debug",
+    "mac:rebuild": "bash build.sh --rebuild",
+    "mac:rebuild:debug": "bash build.sh --debug --rebuild",
+    "mac:install": "bash install.sh",
+    "mac:reinstall": "bash install.sh --rebuild",
+    "mac:dist": "node scripts/dist.js --mac",
+    "win:build": "build.bat",
+    "win:build:release": "build.bat --release",
+    "win:build:debug": "build.bat --debug",
+    "win:rebuild": "build.bat --rebuild",
+    "win:install": "install.bat",
+    "win:reinstall": "install.bat --rebuild",
+    "win:dist": "node scripts/dist.js --win"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/resonaura/flopster"
+  },
+  "author": "Shiru & Resonaura",
+  "license": "WTFPL"
+}

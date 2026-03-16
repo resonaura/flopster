@@ -1,0 +1,2 @@
+#define IDI_BG_IMAGE	1000
+#define IDI_CHR_IMAGE	1001
