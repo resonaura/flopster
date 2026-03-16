@@ -113,6 +113,11 @@ const SCRIPTS = {
   appimage: {
     linux: { cmd: "bash", script: "linux-appimage.sh" },
   },
+  run: {
+    darwin: { cmd: "bash", script: "mac-run.sh" },
+    win32: { cmd: "cmd", script: "win-run.bat", bat: true },
+    linux: { cmd: "bash", script: "linux-run.sh" },
+  },
 };
 
 // ── Parse args ────────────────────────────────────────────────────────────────
@@ -128,6 +133,7 @@ if (!action || action === "--help" || action === "-h") {
   Actions:
     build      Build the plugin for the current platform
     install    Install built artefacts into the system plugin directories
+    run        Rebuild, install, and launch the Standalone app
     pkg        Build macOS .pkg installer         (macOS only)
     msi        Build Windows .msi installer       (Windows only)
     deb        Build Linux .deb package           (Linux only)
@@ -169,7 +175,7 @@ if (!entry) {
 const scriptPath = path.join(TOOLS, entry.script);
 
 // On Windows, for build/install/msi: run once per architecture
-const WIN_MULTI_ARCH_ACTIONS = ["build", "install", "msi"];
+const WIN_MULTI_ARCH_ACTIONS = ["build", "install", "msi"]; // "run" is intentionally excluded
 
 if (
   platform === "win32" &&

@@ -63,7 +63,7 @@ public:
 
                     // CA strength: zero at centre, grows toward edges only.
                     // dist ranges 0..~0.71; squaring makes it fall off fast near centre.
-                    const float caStr = dist * dist * 0.006f * scaleFactor;
+                    const float caStr = dist * dist * 0.003f * scaleFactor;
 
                     // Shift is horizontal-only — avoids lens-bulge look.
                     const float rxf  = (float)x + (-dx) * caStr * (float)W;

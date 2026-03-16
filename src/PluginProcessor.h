@@ -105,6 +105,11 @@ struct FDDState
 
     int sample_type = SAMPLE_TYPE_NONE;
 
+    // GUI hold: keeps the LED lit for a few timer ticks after a short sample
+    // finishes, so STEP / NOISE / BUZZ don't vanish before the next repaint.
+    int  ledHoldType   = SAMPLE_TYPE_NONE; // last non-NONE type seen
+    int  ledHoldFrames = 0;                // ticks remaining to keep LED lit
+
     // Per-voice tail ring (for fadeouts on note changes)
     TailData tail_ring[MAX_TAILS] {};
     int      tail_ptr  = 0;

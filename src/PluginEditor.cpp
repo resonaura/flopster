@@ -1092,6 +1092,29 @@ void FlopsterAudioProcessorEditor::timerCallback()
     processorRef.meterL.store (processorRef.meterL.load() * 0.82f);
     processorRef.meterR.store (processorRef.meterR.load() * 0.82f);
 
+    // Tick down LED hold counters for all voices so short samples
+    // (STEP / NOISE / BUZZ) keep their LED lit for a few frames after finishing.
+    // We snapshot sample_type here on the message thread to avoid racing with
+    // the audio thread reading ledHoldType during paint().
+    for (int v = 0; v < MAX_VOICES; ++v)
+    {
+        auto& fdd = processorRef.FDD[v];
+
+        // If the audio thread just set a new non-NONE type, pick it up here
+        int liveType = fdd.sample_type; // atomic-ish read (plain int, but audio thread sets it)
+        if (liveType != SAMPLE_TYPE_NONE)
+        {
+            fdd.ledHoldType   = liveType;
+            fdd.ledHoldFrames = 8; // ~265ms at 30Hz — long enough to see every STEP hit
+        }
+        else if (fdd.ledHoldFrames > 0)
+        {
+            --fdd.ledHoldFrames;
+            if (fdd.ledHoldFrames == 0)
+                fdd.ledHoldType = SAMPLE_TYPE_NONE;
+        }
+    }
+
     processorRef.guiNeedsUpdate.exchange (false);
 
     // Advance grain frame counter and push to the effect before repainting
@@ -1158,24 +1181,35 @@ void FlopsterAudioProcessorEditor::paint (juce::Graphics& g)
     // ── 3. LED indicators ─────────────────────────────────────────────────────
     const auto& fdd = processorRef.FDD[processorRef.displayVoice];
     struct LedRow { const char* label; bool lit; };
+
+    auto ledLit = [&](int type) -> bool
+    {
+        if (fdd.sample_type == type) return true;
+        if (fdd.ledHoldType == type && fdd.ledHoldFrames > 0) return true;
+        return false;
+    };
+
     const LedRow leds[] = {
-        { "STEP",  fdd.sample_type == SAMPLE_TYPE_STEP },
-        { "SEEK",  ! fdd.head_sample_loop_done && fdd.sample_type == SAMPLE_TYPE_SEEK },
-        { "BUZZ",  ! fdd.head_sample_loop_done && fdd.sample_type == SAMPLE_TYPE_BUZZ },
+        { "STEP",  ledLit (SAMPLE_TYPE_STEP) },
+        { "SEEK",  ledLit (SAMPLE_TYPE_SEEK) },
+        { "BUZZ",  ledLit (SAMPLE_TYPE_BUZZ) },
         { "SPNL",  fdd.spindle_enable },
-        { "NOISE", fdd.sample_type == SAMPLE_TYPE_NOISE },
+        { "NOISE", ledLit (SAMPLE_TYPE_NOISE) },
     };
 
     g.setFont (juce::Font (juce::FontOptions (9.0f)));
     for (int i = 0; i < 5; ++i)
     {
-        int ly = LED_Y + i * LED_ROW;
+        // Vertically centre the 8px dot within the LED_ROW
+        int ly      = LED_Y + i * LED_ROW;
+        int dotY    = ly + (LED_ROW - 8) / 2;
         juce::Colour ledFill = leds[i].lit ? t.lit : t.bgDark;
         g.setColour (ledFill);
-        g.fillRect (LED_X, ly + 4, 8, 8);
+        g.fillRect (LED_X, dotY, 8, 8);
         g.setColour (t.accent);
-        g.drawRect  ((float)LED_X, (float)(ly + 4), 8.0f, 8.0f, 1.0f);
-        g.drawText  (leds[i].label, LED_X + 12, ly, 60, LED_ROW,
+        g.drawRect  ((float)LED_X, (float)dotY, 8.0f, 8.0f, 1.0f);
+        // Vertically centre the label text too
+        g.drawText  (leds[i].label, LED_X + 12, dotY - 1, 60, 10,
                      juce::Justification::left, false);
     }
 
@@ -1190,18 +1224,45 @@ void FlopsterAudioProcessorEditor::paint (juce::Graphics& g)
             g.setColour (t.accent);
             g.drawText (label, MTR_X, y, 10, 8, juce::Justification::centred, false);
 
+            static constexpr int SEG_W    = 3;
+            static constexpr int SEG_GAP  = 1;
+            static constexpr int SEG_STEP = SEG_W + SEG_GAP;
+            static constexpr int BAR_H    = 6;
+
             int barX  = MTR_X + 12;
             int barW  = MTR_W - 12;
-            int nSegs = barW / 4;
+            // Snap barW so it's an exact multiple of SEG_STEP
+            int nSegs = barW / SEG_STEP;
             int nOn   = (int)(level * (float)nSegs);
 
             for (int s = 0; s < nSegs; ++s)
             {
-                bool on  = s < nOn;
-                bool hot = s >= nSegs * 3 / 4;
-                juce::Colour c = on ? (hot ? t.lit : t.accent) : t.bgDark;
+                float t01 = (float)s / (float)(nSegs - 1); // 0..1 across bar
+
+                juce::Colour on_col;
+                if (t01 < 0.5f)
+                {
+                    // green → yellow
+                    float f = t01 / 0.5f;
+                    on_col = juce::Colour::fromRGB (
+                        (uint8_t)(f * 220),
+                        (uint8_t)(180 + (1.0f - f) * 55),
+                        0);
+                }
+                else
+                {
+                    // yellow → red
+                    float f = (t01 - 0.5f) / 0.5f;
+                    on_col = juce::Colour::fromRGB (
+                        220,
+                        (uint8_t)((1.0f - f) * 180),
+                        0);
+                }
+
+                bool on = (s < nOn);
+                juce::Colour c = on ? on_col : t.bgDark;
                 g.setColour (c);
-                g.fillRect (barX + s * 4, y + 1, 3, 6);
+                g.fillRect (barX + s * SEG_STEP, y + 1, SEG_W, BAR_H);
             }
         };
 
@@ -1274,10 +1335,9 @@ void FlopsterAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillRect  (0, creditsY, W, 18);
     g.setColour (t.accent);
     g.setFont   (juce::Font (juce::FontOptions (9.0f)));
-    g.drawText  ("Flopster  by Shiru & Resonaura  \xe2\x80\x94  "
-                 "original samples by Shiru, macOS/VST3/AU port by Resonaura",
+    g.drawText  ("by shiru & resonaura with <3",
                  4, creditsY, W - 8, 18,
-                 juce::Justification::centredLeft, false);
+                 juce::Justification::centred, false);
 }
 
 //==============================================================================

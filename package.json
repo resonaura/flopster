@@ -5,6 +5,11 @@
   "private": true,
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
+    "run": "node scripts/run.js run",
+    "run:fresh": "node scripts/run.js run --rebuild",
+    "run:standalone": "node scripts/run.js run",
+    "run:full": "node scripts/run.js run --full",
+    "run:full:fresh": "node scripts/run.js run --full --rebuild",
     "build": "node scripts/run.js build",
     "build:debug": "node scripts/run.js build --debug",
     "build:release": "node scripts/run.js build --release",

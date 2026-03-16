@@ -551,6 +551,11 @@ void FlopsterAudioProcessor::floppyStartHead (FDDState& fdd, SampleData* sample,
     fdd.head_fade_level        = 0.0f;
     fdd.head_buzz              = buzz;
     fdd.sample_type            = (sample != nullptr) ? type : SAMPLE_TYPE_NONE;
+    if (fdd.sample_type != SAMPLE_TYPE_NONE)
+    {
+        fdd.ledHoldType   = fdd.sample_type;
+        fdd.ledHoldFrames = 6; // hold for ~6 GUI ticks (~200ms at 30Hz)
+    }
 
     if (relative == 0.0 || sample == nullptr)
     {
@@ -923,12 +928,14 @@ float FlopsterAudioProcessor::renderOneSample (FDDState& fdd)
                     {
                         fdd.head_sample = nullptr;
                         if (fdd.sample_type) { fdd.sample_type = SAMPLE_TYPE_NONE; guiNeedsUpdate = true; }
+                        // ledHoldType keeps the LED lit until the hold expires
                     }
                 }
                 else
                 {
                     fdd.head_sample = nullptr;
                     if (fdd.sample_type) { fdd.sample_type = SAMPLE_TYPE_NONE; guiNeedsUpdate = true; }
+                    // ledHoldType keeps the LED lit until the hold expires
                 }
             }
         }
@@ -941,6 +948,7 @@ float FlopsterAudioProcessor::renderOneSample (FDDState& fdd)
             {
                 fdd.head_sample = nullptr;
                 if (fdd.sample_type) { fdd.sample_type = SAMPLE_TYPE_NONE; guiNeedsUpdate = true; }
+                // ledHoldType keeps the LED lit until the hold expires
             }
         }
     }
