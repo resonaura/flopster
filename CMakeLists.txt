@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Flopster VERSION 1.21)
+project(Flopster VERSION 1.24)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,7 +29,7 @@ set(FLOPSTER_ICON_PNG "${CMAKE_CURRENT_SOURCE_DIR}/assets/app.png")
 
 # ── Plugin target ─────────────────────────────────────────────────────────────
 juce_add_plugin(Flopster
-    VERSION                     "1.21"
+    VERSION                     "1.24"
     COMPANY_NAME                "Shiru & Resonaura"
     COMPANY_WEBSITE             "http://shiru.untergrund.net"
     PLUGIN_MANUFACTURER_CODE    Shru
@@ -41,7 +41,7 @@ juce_add_plugin(Flopster
     NEEDS_MIDI_INPUT            TRUE
     NEEDS_MIDI_OUTPUT           FALSE
     IS_MIDI_EFFECT              FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
+    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD     FALSE
 
     # Icons — PNG source; juceaide converts to .icns (macOS) or .ico (Windows)

@@ -204,56 +204,99 @@ public:
 
     // Draw the CRT effects onto an existing Graphics context.
     // 'bounds' should be the full editor rectangle in local coordinates.
-    // 'tint'   is a subtle accent tint used for the phosphor-glow centre.
+    // 'tint'   is the theme accent colour, used for phosphor bloom + bezel.
     void drawOnto (juce::Graphics& g,
                    juce::Rectangle<float> bounds,
-                   juce::Colour tint = juce::Colour (20, 40, 80)) const
+                   juce::Colour tint = juce::Colour (35, 46, 209)) const
     {
+        const float x = bounds.getX();
+        const float y = bounds.getY();
+        const float w = bounds.getWidth();
         const float h = bounds.getHeight();
+        const float cx = bounds.getCentreX();
+        const float cy = bounds.getCentreY();
 
-        // ── 1. Scanlines texture (tiled, very subtle) ────────────────────────
+        // ── 1. Scanlines ──────────────────────────────────────────────────────
+        // Draw every other pixel row as a 1-px black stripe.
+        // Creates micro-contrast that is visible even on near-black backgrounds.
+        {
+            const juce::Colour scanCol = juce::Colour (0, 0, 0).withAlpha (0.38f);
+            g.setColour (scanCol);
+            for (float sy = y + 1.0f; sy < bounds.getBottom(); sy += 2.0f)
+                g.fillRect (juce::Rectangle<float> (x, sy, w, 1.0f));
+        }
+
+        // ── 2. Phosphor bloom ─────────────────────────────────────────────────
+        // Accent-coloured radial glow centred slightly above mid-screen.
+        // Adds a visible colour wash on the dark background.
+        {
+            juce::ColourGradient bloom (
+                tint.withAlpha (0.22f),
+                cx, cy - h * 0.10f,
+                juce::Colours::transparentBlack,
+                cx, y,          // radius = distance to top edge
+                true            // radial
+            );
+            g.setGradientFill (bloom);
+            g.fillRect (bounds);
+        }
+
+        // ── 3. Edge vignette ─────────────────────────────────────────────────
+        // Four independent linear gradients (top / bottom / left / right),
+        // each fading from black-55% at the edge to transparent at 30 % in.
+        {
+            const float depth = 0.28f;   // fraction of dimension
+            const juce::Colour dark = juce::Colour (0, 0, 0).withAlpha (0.55f);
+
+            // top
+            {
+                juce::ColourGradient g2 (dark, cx, y,
+                                         juce::Colours::transparentBlack,
+                                         cx, y + h * depth, false);
+                g.setGradientFill (g2);
+                g.fillRect (juce::Rectangle<float> (x, y, w, h * depth));
+            }
+            // bottom
+            {
+                juce::ColourGradient g2 (dark, cx, bounds.getBottom(),
+                                         juce::Colours::transparentBlack,
+                                         cx, bounds.getBottom() - h * depth, false);
+                g.setGradientFill (g2);
+                g.fillRect (juce::Rectangle<float> (x, bounds.getBottom() - h * depth, w, h * depth));
+            }
+            // left
+            {
+                juce::ColourGradient g2 (dark, x, cy,
+                                         juce::Colours::transparentBlack,
+                                         x + w * depth, cy, false);
+                g.setGradientFill (g2);
+                g.fillRect (juce::Rectangle<float> (x, y, w * depth, h));
+            }
+            // right
+            {
+                juce::ColourGradient g2 (dark, bounds.getRight(), cy,
+                                         juce::Colours::transparentBlack,
+                                         bounds.getRight() - w * depth, cy, false);
+                g.setGradientFill (g2);
+                g.fillRect (juce::Rectangle<float> (bounds.getRight() - w * depth, y, w * depth, h));
+            }
+        }
+
+        // ── 4. Accent-coloured bezel ──────────────────────────────────────────
+        g.setColour (tint.withAlpha (0.28f));
+        g.drawRect (bounds.reduced (1.0f), 1.5f);
+
+        // ── 5. Tiled scanlines image (optional, layered on top) ───────────────
         if (scanlines.isValid())
         {
-            g.setOpacity (0.22f);
-            int sw = scanlines.getWidth();
-            int sh = scanlines.getHeight();
-            for (int ty = (int)bounds.getY(); ty < (int)bounds.getBottom(); ty += sh)
-                for (int tx = (int)bounds.getX(); tx < (int)bounds.getRight(); tx += sw)
+            g.setOpacity (0.12f);
+            const int sw = scanlines.getWidth();
+            const int sh = scanlines.getHeight();
+            for (int ty = (int)y; ty < (int)bounds.getBottom(); ty += sh)
+                for (int tx = (int)x; tx < (int)bounds.getRight(); tx += sw)
                     g.drawImage (scanlines, tx, ty, sw, sh, 0, 0, sw, sh);
             g.setOpacity (1.0f);
         }
-
-        // ── 2. Lens vignette (dark radial gradient from edges inward) ────────
-        {
-            juce::ColourGradient vignette (
-                juce::Colours::transparentBlack,
-                bounds.getCentreX(), bounds.getCentreY(),
-                juce::Colour (0, 0, 0).withAlpha (0.60f),
-                bounds.getX(), bounds.getY(),
-                true   // radial
-            );
-            vignette.addColour (0.50, juce::Colours::transparentBlack);
-            vignette.addColour (1.00, juce::Colour (0, 0, 0).withAlpha (0.60f));
-            g.setGradientFill (vignette);
-            g.fillRect (bounds);
-        }
-
-        // ── 3. Phosphor-glow centre tinted by the current theme accent ───────
-        {
-            juce::ColourGradient glow (
-                tint.withAlpha (0.13f),
-                bounds.getCentreX(), bounds.getY() + h * 0.40f,
-                juce::Colours::transparentBlack,
-                bounds.getCentreX(), bounds.getBottom(),
-                true
-            );
-            g.setGradientFill (glow);
-            g.fillRect (bounds);
-        }
-
-        // ── 4. Thin bright inner border (CRT bezel reflection) ───────────────
-        g.setColour (juce::Colour (80, 120, 160).withAlpha (0.10f));
-        g.drawRect (bounds.reduced (1.0f), 1.5f);
     }
 
 private:

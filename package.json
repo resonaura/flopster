@@ -1,6 +1,6 @@
 {
   "name": "flopster",
-  "version": "1.22",
+  "version": "1.24",
   "description": "Floppy drive instrument plugin by Shiru & Resonaura",
   "private": true,
   "scripts": {
@@ -15,7 +15,7 @@
     "dist": "node scripts/dist.js --all",
     "dist:mac": "node scripts/dist.js --mac",
     "dist:win": "node scripts/dist.js --win",
-    "set-version": "node -e \"const v=process.argv[1];if(!v||!/^\\d+\\.\\d+/.test(v)){console.error('Usage: npm run set-version <x.y.z>');process.exit(1);}const fs=require('fs');fs.writeFileSync('src/version.h','#pragma once\\n// Edit this value to update the plugin version string, then run install.sh.\\n// npm run set-version <x.y.z> also updates this file automatically.\\n#define FLOPSTER_VERSION \\\"'+v+'\\\"\\n');const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));pkg.version=v;fs.writeFileSync('package.json',JSON.stringify(pkg,null,2)+'\\n');console.log('Version set to '+v);\" --",
+    "set-version": "node scripts/set-version.js",
     "clean": "node -e \"require('fs').rmSync('build',{recursive:true,force:true}); require('fs').rmSync('build-debug',{recursive:true,force:true});\"",
     "mac:build": "bash build.sh",
     "mac:build:release": "bash build.sh --release",

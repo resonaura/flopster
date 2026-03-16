@@ -54,11 +54,11 @@ static const Theme s_themes[] =
       juce::Colour (0x3C, 0x91, 0xE6),
       juce::Colour (0x9F, 0xD3, 0x56) },
 
-    // 6 – Warm Desert  [1D1A05 CA3C25 E6AA68 FFFBBD 7FB069]
-    { juce::Colour (0x0E, 0x0D, 0x03),   // bg: 1D1A05 darkened
-      juce::Colour (0x1D, 0x1A, 0x05),
-      juce::Colour (0x7F, 0xB0, 0x69),
-      juce::Colour (0xE6, 0xAA, 0x68) },
+    // 6 – Sakura  [MITSUMI D359M3D — Japanese pink aesthetic]
+    { juce::Colour (0x17, 0x07, 0x0E),   // near-black with warm pink tint
+      juce::Colour (0x3C, 0x12, 0x30),   // deep wine / dark magenta
+      juce::Colour (0xE8, 0x44, 0x8C),   // j-pop sakura rose
+      juce::Colour (0xFF, 0xB7, 0xD0) }, // soft sakura petal bloom
 
     // 7 – Indigo Dream  [242038 9067C6 8D86C9 CAC4CE F7ECE1]
     { juce::Colour (0x14, 0x12, 0x26),   // bg: 242038 darkened
