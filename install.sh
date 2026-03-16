@@ -122,17 +122,16 @@ if [ "$REBUILD" -eq 1 ] || [ ! -f "$ARTEFACT_BINARY" ]; then
     ok "Configured."
 
     info "Building ($JOBS cores)…"
-    ninja -C "$BUILD" -j"$JOBS" \
-        2>&1 | grep -E "^\[|error:|Linking" \
-        || die "Build failed. Run  ninja -C $BUILD  for full output."
+    ninja -C "$BUILD" -j"$JOBS" 2>&1 | sed 's/^/    /' || die "Build failed. Run  ninja -C $BUILD  for full output."
     ok "Build succeeded."
-    # Restore compile_commands.json symlink at repo root (wiped by --rebuild)
-    if [ -f "$BUILD/compile_commands.json" ]; then
-        ln -sf "build/compile_commands.json" "$SCRIPT_DIR/compile_commands.json"
-        ok "compile_commands.json symlink restored."
-    fi
 else
     ok "Release artefacts already present — skipping build.  (Pass --rebuild to force.)"
+fi
+
+# ── Always sync compile_commands.json to repo root ────────────────────────────
+if [ -f "$BUILD/compile_commands.json" ]; then
+    cp "$BUILD/compile_commands.json" "$SCRIPT_DIR/compile_commands.json"
+    ok "compile_commands.json synced to repo root."
 fi
 
 # ── 3. Verify sources ─────────────────────────────────────────────────────────

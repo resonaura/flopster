@@ -98,11 +98,10 @@ try {
     /* ignore if not present */
   }
 
-  // Attempt to create a relative symlink for portability
-  const relativeTarget = path.join("build", "compile_commands.json");
-  fs.symlinkSync(relativeTarget, rootCompileDb);
+  // Copy to repo root so it survives build-directory rebuilds
+  fs.copyFileSync(buildCompileDb, rootCompileDb);
   console.log(
-    `🔗  Created symlink: compile_commands.json -> ${relativeTarget}`,
+    "📄  Copied compile_commands.json to repository root.",
   );
 } catch (symlinkErr) {
   try {

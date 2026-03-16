@@ -28,6 +28,7 @@
 #define SAMPLE_HEAD_OUT_LEN     200.0f
 
 #define MAX_TAILS               16
+#define MAX_VOICES              3
 
 //==============================================================================
 enum SampleType
@@ -103,6 +104,13 @@ struct FDDState
     float low_freq_add = 0.0f;
 
     int sample_type = SAMPLE_TYPE_NONE;
+
+    // Per-voice tail ring (for fadeouts on note changes)
+    TailData tail_ring[MAX_TAILS] {};
+    int      tail_ptr  = 0;
+
+    // MIDI note currently assigned to this voice (-1 = free)
+    int assigned_note = -1;
 };
 
 //==============================================================================
@@ -152,8 +160,14 @@ public:
     // Public for editor access
     juce::AudioProcessorValueTreeState apvts;
 
-    // FDD state is read by the editor for the head position / LED display
-    FDDState FDD;
+    // FDD state: one per voice.  Editor reads FDD[displayVoice] for display.
+    FDDState FDD[MAX_VOICES];
+
+    // Which voice to show in the editor (most recently triggered)
+    int displayVoice = 0;
+
+    // Number of active voices (1-3, default 3)
+    int numVoices = 3;
 
     // Preset names (loaded from disk)
     juce::String programNames[NUM_PROGRAMS];
@@ -174,6 +188,22 @@ public:
     // True once samples have been loaded at least once and are safe to read.
     // Audio thread checks this before touching any SampleData.
     std::atomic<bool> samplesReady { false };
+
+    // Set by setStateInformation so the editor's timer can sync the preset
+    // combo-box and images after a DAW project reload.
+    std::atomic<bool> editorNeedsPresetRefresh { false };
+
+    // When true, samples are normalized to the same peak level on load.
+    // Default: true.  Toggled by the Norm button in the editor.
+    bool normalizeSamples { true };
+
+    // Exposed so the editor can force a reload when normalizeSamples changes.
+    int currentProgramLoaded { -1 };
+
+    // Audio level meters: peak 0..1.  Written on audio thread (raise-only),
+    // read and decayed on the editor's message-thread timer.
+    std::atomic<float> meterL { 0.0f };
+    std::atomic<float> meterR { 0.0f };
 
     // Keyboard octave offset (in semitones, multiples of 12).
     // Written by the editor (message thread), read only in injectMidiNote —
@@ -217,13 +247,17 @@ private:
     SampleData SampleDiskPull;
 
     //==========================================================================
-    // Tail ring-buffer for fading out old head sounds
-    TailData tails[MAX_TAILS];
-    int      tailPtr = 0;
+    // Voice allocator: returns index of next voice to use for a new note
+    int  nextVoice  = 0;
+    int  allocateVoice (int note);
+
+    // Start / stop a specific voice
+    void startVoice (int v, int note, int vel);
+    void stopVoice  (int v);
 
     //==========================================================================
     // MIDI state
-    uint8_t  midiKeyState[128];
+    uint8_t  midiKeyState[128];  // kept for backward compat / AllNotesOff
     float    midiPitchBend      = 0.0f;
     float    midiPitchBendRange = 2.0f;
     int      midiRPNLsb = 0, midiRPNMsb = 0;
@@ -232,7 +266,8 @@ private:
     //==========================================================================
     // Programs
     int currentProgram       = 0;
-    int currentProgramLoaded = -1;
+    // NOTE: currentProgramLoaded is now public (see above) so the editor can
+    // force a reload when normalization setting changes.
 
     //==========================================================================
     // Guards all SampleData arrays: both the message-thread loader and the
@@ -253,17 +288,17 @@ private:
     void  scanPresets();
 
     //==========================================================================
-    // Floppy helpers
-    void  tailAdd           (SampleData* sample, double ptr, double step, float level);
-    void  floppyStartHead   (SampleData* sample, float gain, int type, bool loop, bool buzz, double relative);
-    void  floppyStep        (int pos);
-    void  floppySpindle     (bool enable);
+    // Floppy helpers (all operate on a specific FDD voice)
+    void  tailAdd           (FDDState& fdd, SampleData* sample, double ptr, double step, float level);
+    void  floppyStartHead   (FDDState& fdd, SampleData* sample, float gain, int type, bool loop, bool buzz, double relative);
+    void  floppyStep        (FDDState& fdd, int pos);
+    void  floppySpindle     (FDDState& fdd, bool enable);
     void  updatePitch       ();
-    bool  anyKeyDown        () const;
+    bool  anyVoiceActive    () const;
 
     //==========================================================================
-    // Per-sample audio render (called once per sample inside processBlock)
-    float renderOneSample();
+    // Per-sample audio render for one voice
+    float renderOneSample   (FDDState& fdd);
 
     //==========================================================================
     // MIDI event helpers

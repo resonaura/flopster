@@ -4,45 +4,103 @@
 #include "PluginProcessor.h"
 
 //==============================================================================
-// A single knob/slider control drawn in the flopster pixel-art style
-// (character-cell display showing a numeric value with left/right bracket chars)
+// Colour theme: four roles used everywhere in the UI.
 //==============================================================================
-class FlopsterSlider : public juce::Component
+struct Theme
+{
+    juce::Colour bg;      // main background fill
+    juce::Colour bgDark;  // secondary bg – inactive LEDs, slider backgrounds
+    juce::Colour accent;  // borders, text, active slider fill
+    juce::Colour lit;     // active LEDs, hot meter segments, head indicator
+};
+
+//==============================================================================
+// Flopster pixel-art look-and-feel for sliders:
+// draws a compact horizontal bar with a numeric value label.
+//==============================================================================
+class FlopsterSliderLAF : public juce::LookAndFeel_V4
+{
+public:
+    // Theme colours – updated by the editor whenever the preset changes.
+    juce::Colour colBg     { 16,  29,  66  };
+    juce::Colour colFill   { 35,  46,  209 };
+    juce::Colour colText   { 137, 210, 220 };
+
+    void setThemeColors (juce::Colour bg, juce::Colour fill, juce::Colour text)
+    {
+        colBg   = bg;
+        colFill = fill;
+        colText = text;
+    }
+
+    void drawLinearSlider (juce::Graphics& g,
+                           int x, int y, int width, int height,
+                           float /*sliderPos*/, float /*minSliderPos*/, float /*maxSliderPos*/,
+                           juce::Slider::SliderStyle, juce::Slider& slider) override
+    {
+        const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat();
+
+        // Background
+        g.setColour (colBg);
+        g.fillRect (bounds);
+
+        // Fill bar
+        float proportion = (float)((slider.getValue() - slider.getMinimum())
+                         / (slider.getMaximum() - slider.getMinimum()));
+        float fillW = bounds.getWidth() * (float) proportion;
+        g.setColour (colFill);
+        g.fillRect (bounds.withWidth (fillW));
+
+        // Border
+        g.setColour (colFill);
+        g.drawRect (bounds, 1.0f);
+
+        // Value text
+        g.setColour (colText);
+        g.setFont (juce::Font (juce::FontOptions (10.0f)));
+        g.drawText (slider.getTextFromValue (slider.getValue()),
+                    bounds.toNearestInt(), juce::Justification::centred, false);
+    }
+
+    juce::Label* createSliderTextBox (juce::Slider&) override { return nullptr; }
+};
+
+//==============================================================================
+// A labelled slider bound to an APVTS parameter.
+//==============================================================================
+class FlopsterSlider : public juce::Slider
 {
 public:
     FlopsterSlider (const juce::String& paramID,
                     juce::AudioProcessorValueTreeState& apvts,
-                    juce::Image charSheet);
+                    juce::Image /*charSheet - unused, kept for API compat*/)
+        : juce::Slider (juce::Slider::LinearHorizontal, juce::Slider::NoTextBox)
+    {
+        setLookAndFeel (&laf);
+        setRange (0.0, 1.0);
+        attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>
+                         (apvts, paramID, *this);
+    }
 
-    ~FlopsterSlider() override;
+    ~FlopsterSlider() override
+    {
+        attachment.reset();
+        setLookAndFeel (nullptr);
+    }
 
-    void paint (juce::Graphics& g) override;
-    void resized() override;
+    // Apply theme colours to the embedded LAF and repaint.
+    void setThemeColors (juce::Colour bg, juce::Colour fill, juce::Colour text)
+    {
+        laf.setThemeColors (bg, fill, text);
+        repaint();
+    }
 
-    void mouseDown  (const juce::MouseEvent& e) override;
-    void mouseDrag  (const juce::MouseEvent& e) override;
-    void mouseUp    (const juce::MouseEvent& e) override;
-    void mouseDoubleClick (const juce::MouseEvent& e) override;
-
-    // Called by the editor when it needs to repaint
-    void refreshValue();
+    // No-op helpers kept so the editor doesn't need changes
+    void refreshValue()       { repaint(); }
+    void setCharSheet (juce::Image) {}
 
 private:
-    void renderChar (juce::Graphics& g, int cellX, int charIndex) const;
-
-    juce::String     paramID;
-    juce::AudioProcessorValueTreeState& apvts;
-    juce::Image      charSheet;
-
-    int charW = 1;
-    int charH = 1;
-
-    bool  isHovered    = false;
-    bool  isDragging   = false;
-    int   dragStartY   = 0;
-    float dragStartValue = 0.0f;
-
-    juce::Slider hiddenSlider;
+    FlopsterSliderLAF laf;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FlopsterSlider)
@@ -77,49 +135,43 @@ public:
     void setShowKeyLabels (bool show);
     void setOctaveOffset(int semitones);
 
+    // Theme colours for keyboard rendering
+    void setThemeColors (juce::Colour bg, juce::Colour bgDark,
+                         juce::Colour accent, juce::Colour lit)
+    {
+        thBg     = bg;
+        thBgDark = bgDark;
+        thAccent = accent;
+        thLit    = lit;
+        repaint();
+    }
+
 private:
     // ---- layout helpers -------------------------------------------------------
-    // Returns true if the given note (absolute MIDI) is a black key
     static bool isBlackKey (int note);
-
-    // Returns the rectangle (in local coords) for the given note index (0-based
-    // within our 30-note range C3..B5).  Returns empty rect if out of range.
     juce::Rectangle<float> noteRect (int note) const;
-
-    // Returns the MIDI note number hit at a local point, or -1
     int noteAtPoint (juce::Point<float> pt) const;
 
     // ---- state ---------------------------------------------------------------
     NoteCallback callback;
 
-    // MIDI_START = C3 = 48.  We show C3 (48) .. E5 (76) = 29 notes
-    static constexpr int MIDI_START = 48;   // C3
-    static constexpr int MIDI_END   = 76;   // E5  (inclusive)
-    static constexpr int NUM_NOTES  = MIDI_END - MIDI_START + 1; // 29
+    static constexpr int MIDI_START = 48;
+    static constexpr int MIDI_END   = 76;
+    static constexpr int NUM_NOTES  = MIDI_END - MIDI_START + 1;
 
-    // Which notes are currently active (pressed)
     bool activeNotes[128] {};
-
-    // The note being held by the mouse (-1 = none)
     int  mousePressedNote = -1;
-
-    // Show key labels (letters) for standalone mode
     bool showLabels = false;
-    int octaveOffset = 0;
+    int  octaveOffset = 0;
 
-    // Cached layout (recomputed in resized())
     float whiteKeyW  = 0.0f;
     float whiteKeyH  = 0.0f;
     float blackKeyW  = 0.0f;
     float blackKeyH  = 0.0f;
     int   numWhiteKeys = 0;
 
-    // Map from MIDI note -> white-key index (within our range, for layout)
-    // -1 means it is a black key
     int whiteIndex[NUM_NOTES] {};
 
-    // Computer-keyboard label for each note (-1 = no label)
-    // Populated in constructor based on FL Studio layout
     struct KeyLabel
     {
         int  midiNote;
@@ -130,7 +182,82 @@ private:
     void buildLayout();
     void buildKeyLabels();
 
+    // Theme colour slots (initialised to the original default palette)
+    juce::Colour thBg     { 13,  19,  23  };
+    juce::Colour thBgDark { 16,  29,  66  };
+    juce::Colour thAccent { 35,  46,  209 };
+    juce::Colour thLit    { 137, 210, 220 };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PixelKeyboard)
+};
+
+//==============================================================================
+// CRT monitor overlay helper – NOT a Component; drawn directly via drawOnto()
+// from paintOverChildren() so it is guaranteed to sit above every widget.
+//==============================================================================
+class CrtOverlay
+{
+public:
+    CrtOverlay() = default;
+
+    void setScanlinesImage (juce::Image img) { scanlines = std::move (img); }
+
+    // Draw the CRT effects onto an existing Graphics context.
+    // 'bounds' should be the full editor rectangle in local coordinates.
+    // 'tint'   is a subtle accent tint used for the phosphor-glow centre.
+    void drawOnto (juce::Graphics& g,
+                   juce::Rectangle<float> bounds,
+                   juce::Colour tint = juce::Colour (20, 40, 80)) const
+    {
+        const float h = bounds.getHeight();
+
+        // ── 1. Scanlines texture (tiled, very subtle) ────────────────────────
+        if (scanlines.isValid())
+        {
+            g.setOpacity (0.22f);
+            int sw = scanlines.getWidth();
+            int sh = scanlines.getHeight();
+            for (int ty = (int)bounds.getY(); ty < (int)bounds.getBottom(); ty += sh)
+                for (int tx = (int)bounds.getX(); tx < (int)bounds.getRight(); tx += sw)
+                    g.drawImage (scanlines, tx, ty, sw, sh, 0, 0, sw, sh);
+            g.setOpacity (1.0f);
+        }
+
+        // ── 2. Lens vignette (dark radial gradient from edges inward) ────────
+        {
+            juce::ColourGradient vignette (
+                juce::Colours::transparentBlack,
+                bounds.getCentreX(), bounds.getCentreY(),
+                juce::Colour (0, 0, 0).withAlpha (0.60f),
+                bounds.getX(), bounds.getY(),
+                true   // radial
+            );
+            vignette.addColour (0.50, juce::Colours::transparentBlack);
+            vignette.addColour (1.00, juce::Colour (0, 0, 0).withAlpha (0.60f));
+            g.setGradientFill (vignette);
+            g.fillRect (bounds);
+        }
+
+        // ── 3. Phosphor-glow centre tinted by the current theme accent ───────
+        {
+            juce::ColourGradient glow (
+                tint.withAlpha (0.13f),
+                bounds.getCentreX(), bounds.getY() + h * 0.40f,
+                juce::Colours::transparentBlack,
+                bounds.getCentreX(), bounds.getBottom(),
+                true
+            );
+            g.setGradientFill (glow);
+            g.fillRect (bounds);
+        }
+
+        // ── 4. Thin bright inner border (CRT bezel reflection) ───────────────
+        g.setColour (juce::Colour (80, 120, 160).withAlpha (0.10f));
+        g.drawRect (bounds.reduced (1.0f), 1.5f);
+    }
+
+private:
+    juce::Image scanlines;
 };
 
 //==============================================================================
@@ -141,12 +268,9 @@ class FlopsterAudioProcessorEditor : public juce::AudioProcessorEditor,
 {
 public:
     // Load images (background + character sheet) for a given preset name.
-    // This is intended to be called from the message thread (editor/UI code)
-    // when the user selects a different preset so the UI can update immediately.
     void loadImagesFromPreset (const juce::String& presetName);
 
-    // Lightweight accessors so external code (tests / tooling / wrappers) can
-    // query key UI pieces without exposing internals directly.
+    // Lightweight accessors
     juce::Image getBackgroundImage() const;
     juce::Image getCharImage() const;
     juce::ComboBox* getPresetBox() const;
@@ -156,53 +280,44 @@ public:
     ~FlopsterAudioProcessorEditor() override;
 
     //==========================================================================
-    void paint   (juce::Graphics&) override;
-    void resized () override;
+    void paint            (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;   // draws CRT overlay
+    void resized          () override;
 
     //==========================================================================
     void timerCallback() override;
 
     //==========================================================================
-    // Button listener (octave shift buttons)
     void buttonClicked (juce::Button* btn) override;
 
     //==========================================================================
-    // Keyboard handling for computer-keyboard MIDI input
-    // NOTE: only active in standalone mode — in plugin mode the host handles it.
     bool keyPressed      (const juce::KeyPress& key) override;
     bool keyStateChanged (bool isKeyDown) override;
 
-    // Release all held notes — called on focus loss / app switch
     void focusLost (FocusChangeType cause) override;
     void visibilityChanged() override;
 
-    // juce::FocusChangeListener — fires when ANY window gains focus,
-    // so we catch Cmd/Alt+Tab reliably.
+    // juce::FocusChangeListener
     void globalFocusChanged (juce::Component* focusedComponent) override;
 
 private:
+    // Apply a theme (derived from the given program index) to every widget.
+    void applyTheme (int programIndex);
+
+    // Returns a const ref to the active theme (for use inside paint()).
+    const Theme& currentTheme() const { return m_theme; }
+
     //==========================================================================
-    void renderHead (juce::Graphics& g, int sx, int sy, int w, int h, int pos);
-    void renderChar (juce::Graphics& g, int pixelX, int pixelY, int charIndex);
-
-    // Sends a note to the processor via the COMPUTER KEYBOARD path.
-    // Applies kbOctaveOffset before injecting.  Standalone-only.
-    void sendNote (int midiNote, int velocity);
-
-    // Sends a note to the processor via the ON-SCREEN KEYBOARD (mouse) path.
-    // Bypasses kbOctaveOffset — the visual key IS the intended note.
+    void sendNote    (int midiNote, int velocity);
     void sendRawNote (int midiNote, int velocity);
-
-    // Checks all tracked keyboard keys and sends note-off for any that were
-    // released since the last call
-    void checkKeyboardReleases();
-
-    // Unconditionally releases every currently-held keyboard note (called on
-    // focus loss so notes never get stuck after Alt+Tab / Cmd+Tab)
+    void pollKeyboard();
     void releaseAllKbNotes();
 
     //==========================================================================
     FlopsterAudioProcessor& processorRef;
+
+    // Currently active theme – set by applyTheme()
+    Theme m_theme;
 
     juce::Image bgImage;
     juce::Image charImage;
@@ -210,9 +325,9 @@ private:
     int charW = 1;
     int charH = 1;
 
-    static constexpr int GUI_SCALE = 2;
-
-    juce::Image renderBuffer;
+    static constexpr int GUI_SCALE  = 2;
+    static constexpr int MAIN_W     = 600;
+    static constexpr int MAIN_H     = 260;
 
     //==========================================================================
     std::unique_ptr<FlopsterSlider> sliderHeadStep;
@@ -224,42 +339,42 @@ private:
     std::unique_ptr<FlopsterSlider> sliderOctave;
     std::unique_ptr<FlopsterSlider> sliderOutput;
 
-    std::unique_ptr<juce::ComboBox>  presetBox;
-    std::unique_ptr<juce::Label>     presetLabel;
+    std::unique_ptr<juce::ComboBox>   presetBox;
+    std::unique_ptr<juce::Label>      presetLabel;
+    std::unique_ptr<juce::TextButton> btnSavePreset;
+    std::unique_ptr<juce::TextButton> btnLoadPreset;
+    std::unique_ptr<juce::FileChooser> fileChooser;
+
+    std::unique_ptr<juce::TextButton> btnVoices;
+    std::unique_ptr<juce::TextButton> btnNormalize;
+
+    void savePresetToFile();
+    void loadPresetFromFile();
 
     std::unique_ptr<PixelKeyboard>   pixelKeyboard;
 
-    // Octave shift controls (standalone mode only — always shown for visual
-    // reference but only functional in standalone)
     std::unique_ptr<juce::TextButton> btnOctaveDown;
     std::unique_ptr<juce::TextButton> btnOctaveUp;
     std::unique_ptr<juce::Label>      lblOctave;
 
-    // Current keyboard octave offset in semitones (multiples of 12)
-    // Range: -36 .. +36  (i.e. ±3 octaves)
-    int kbOctaveOffset { 0 };
-
-    // True when running as a standalone application
-    bool isStandalone { false };
+    int kbOctaveOffset { -12 };
+    bool isStandalone  { false };
 
     //==========================================================================
-    // FL-Studio-style computer keyboard mapping: keyCode -> midiNote
-    // Built in the constructor
     struct KbMapping
     {
-        int keyCode;   // juce::KeyPress key code
+        int keyCodes[4];
         int midiNote;
     };
     std::vector<KbMapping> kbMap;
     void buildKbMap();
 
-    // Tracks which computer-keyboard keys are currently down (by midiNote),
-    // so we can detect releases in keyStateChanged
-    // key = midiNote (raw, pre-shift), value = juce::KeyPress code that triggered it
-    std::map<int, int> heldKbNotes;        // rawNote  -> keyCode
-    // key = midiNote (raw, pre-shift), value = shifted note that was actually played
-    // Needed so releaseAllKbNotes sends the exact matching note-off.
-    std::map<int, int> heldKbShiftedNotes; // rawNote  -> shiftedNote
+    std::map<int, bool> heldKbNotes;
+    std::map<int, int>  heldKbShiftedNotes;
+
+    //==========================================================================
+    // CRT overlay – plain helper, painted in paintOverChildren()
+    std::unique_ptr<CrtOverlay> crtOverlay;
 
     //==========================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FlopsterAudioProcessorEditor)

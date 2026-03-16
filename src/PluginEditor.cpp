@@ -1,142 +1,84 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
-
-// Character indices in the char sheet:
-// 0  = blank
-// 1  = left bracket normal
-// 2  = right bracket normal
-// 3  = left bracket hover/focus
-// 4  = right bracket hover/focus
-// 5  = minus sign
-// 6..15 = digits 0..9
-// 16 = LED on
-// 17 = LED off
-// 18 = head indicator
+#include "version.h"
 
 //==============================================================================
-// FlopsterSlider
+// Colour themes — one per preset slot (index 0 = fallback/original).
+// Within each palette the five supplied hex values are sorted by luminance
+// and mapped to: bg (darkest) → bgDark → accent → lit (brightest used).
+//
+//  0  Original        0D1317 / 101D42 / 232ED1 / 89D2DC
+//  1  Purple Dream    28262C / 14248A / 998FC7 / D4C2FC
+//  2  Teal & Gold     000F08 / 3E2F5B / 136F63 / E0CA3C
+//  3  Arctic          0A090C / 07393C / 2C666E / 90DDF0
+//  4  Crimson Rose    0D090A / 361F27 / 912F56 / EAF2EF
+//  5  Synthwave       221D24 / 342E37 / 3C91E6 / 9FD356
+//  6  Warm Desert     0E0D03 / 1D1A05 / 7FB069 / E6AA68
+//  7  Indigo Dream    141226 / 242038 / 9067C6 / CAC4CE
 //==============================================================================
-
-FlopsterSlider::FlopsterSlider (const juce::String& pid,
-                                 juce::AudioProcessorValueTreeState& tree,
-                                 juce::Image cs)
-    : paramID (pid), apvts (tree), charSheet (cs)
+static const Theme s_themes[] =
 {
-    setRepaintsOnMouseActivity (false);
+    // 0 – Original (default / empty presets)
+    { juce::Colour (0x0D, 0x13, 0x17),
+      juce::Colour (0x10, 0x1D, 0x42),
+      juce::Colour (0x23, 0x2E, 0xD1),
+      juce::Colour (0x89, 0xD2, 0xDC) },
 
-    if (charSheet.isValid())
-    {
-        charW = charSheet.getWidth()  / 19;
-        charH = charSheet.getHeight();
-    }
+    // 1 – Purple Dream  [28262C 14248A 998FC7 D4C2FC F9F5FF]
+    { juce::Colour (0x28, 0x26, 0x2C),
+      juce::Colour (0x14, 0x24, 0x8A),
+      juce::Colour (0x99, 0x8F, 0xC7),
+      juce::Colour (0xD4, 0xC2, 0xFC) },
 
-    hiddenSlider.setRange (0.0, 1.0);
-    hiddenSlider.setVisible (false);
-    addChildComponent (hiddenSlider);
+    // 2 – Teal & Gold  [000F08 3E2F5B 136F63 E0CA3C F34213]
+    { juce::Colour (0x00, 0x0F, 0x08),
+      juce::Colour (0x3E, 0x2F, 0x5B),
+      juce::Colour (0x13, 0x6F, 0x63),
+      juce::Colour (0xE0, 0xCA, 0x3C) },
 
-    attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        apvts, paramID, hiddenSlider);
+    // 3 – Arctic  [0A090C 07393C 2C666E 90DDF0 F0EDEE]
+    { juce::Colour (0x0A, 0x09, 0x0C),
+      juce::Colour (0x07, 0x39, 0x3C),
+      juce::Colour (0x2C, 0x66, 0x6E),
+      juce::Colour (0x90, 0xDD, 0xF0) },
+
+    // 4 – Crimson Rose  [0D090A 361F27 521945 912F56 EAF2EF]
+    { juce::Colour (0x0D, 0x09, 0x0A),
+      juce::Colour (0x36, 0x1F, 0x27),
+      juce::Colour (0x91, 0x2F, 0x56),
+      juce::Colour (0xEA, 0xF2, 0xEF) },
+
+    // 5 – Synthwave  [342E37 9FD356 3C91E6 FA824C FAFFFD]
+    { juce::Colour (0x22, 0x1D, 0x24),   // bgDark: 342E37 darkened
+      juce::Colour (0x34, 0x2E, 0x37),
+      juce::Colour (0x3C, 0x91, 0xE6),
+      juce::Colour (0x9F, 0xD3, 0x56) },
+
+    // 6 – Warm Desert  [1D1A05 CA3C25 E6AA68 FFFBBD 7FB069]
+    { juce::Colour (0x0E, 0x0D, 0x03),   // bg: 1D1A05 darkened
+      juce::Colour (0x1D, 0x1A, 0x05),
+      juce::Colour (0x7F, 0xB0, 0x69),
+      juce::Colour (0xE6, 0xAA, 0x68) },
+
+    // 7 – Indigo Dream  [242038 9067C6 8D86C9 CAC4CE F7ECE1]
+    { juce::Colour (0x14, 0x12, 0x26),   // bg: 242038 darkened
+      juce::Colour (0x24, 0x20, 0x38),
+      juce::Colour (0x90, 0x67, 0xC6),
+      juce::Colour (0xCA, 0xC4, 0xCE) },
+};
+
+static const Theme& getThemeForProgram (int programIndex)
+{
+    // Presets 0-6 → themes 1-7 (one per physical floppy model).
+    // Anything else (empty slots) falls back to the original theme 0.
+    if (programIndex >= 0 && programIndex <= 6)
+        return s_themes[programIndex + 1];
+    return s_themes[0];
 }
 
-FlopsterSlider::~FlopsterSlider()
-{
-    // Ensure the attachment is destroyed (and removes its listener) before
-    // the `hiddenSlider` member is torn down.  This prevents the attachment's
-    // destructor from calling into a slider that's already been destroyed.
-    attachment.reset();
-}
-
-void FlopsterSlider::paint (juce::Graphics& g)
-{
-    if (! charSheet.isValid()) return;
-
-    float raw = (float) hiddenSlider.getValue();
-
-    char buf[16] = {};
-    auto* param = apvts.getParameter (paramID);
-    if (param)
-    {
-        juce::String disp = param->getText (raw, 8);
-        strncpy (buf, disp.toRawUTF8(), sizeof(buf) - 1);
-    }
-
-    char val[3] = {0, 0, 0};
-    int n = std::abs (std::atoi (buf));
-
-    if (n >= 100) val[0] = (char)((n / 100 % 10) + 6);
-    if (n >=  10) val[1] = (char)((n /  10 % 10) + 6);
-    val[2] = (char)((n % 10) + 6);
-
-    if (buf[0] == '-') val[0] = 5;
-
-    bool active = isHovered || isDragging;
-
-    renderChar (g, 0, active ? 3 : 1);
-    renderChar (g, 1, val[0]);
-    renderChar (g, 2, val[1]);
-    renderChar (g, 3, val[2]);
-    renderChar (g, 4, active ? 4 : 2);
-}
-
-void FlopsterSlider::resized()
-{
-    hiddenSlider.setBounds (getLocalBounds());
-}
-
-void FlopsterSlider::renderChar (juce::Graphics& g, int cellX, int charIndex) const
-{
-    if (! charSheet.isValid()) return;
-    if (charIndex < 0)  charIndex = 0;
-    if (charIndex > 18) charIndex = 18;
-
-    juce::Rectangle<int> src (charIndex * charW, 0, charW, charH);
-    juce::Rectangle<int> dst (cellX * charW,     0, charW, charH);
-
-    g.drawImage (charSheet, dst.getX(), dst.getY(), dst.getWidth(), dst.getHeight(),
-                 src.getX(), src.getY(), src.getWidth(), src.getHeight());
-}
-
-void FlopsterSlider::mouseDown (const juce::MouseEvent& e)
-{
-    isHovered      = true;
-    isDragging     = true;
-    dragStartY     = e.getScreenPosition().getY();
-    dragStartValue = (float)hiddenSlider.getValue();
-    repaint();
-}
-
-void FlopsterSlider::mouseDrag (const juce::MouseEvent& e)
-{
-    if (! isDragging) return;
-
-    int   dy     = dragStartY - e.getScreenPosition().getY();
-    float newVal = dragStartValue + (float)dy / 250.0f;
-    newVal = juce::jlimit (0.0f, 1.0f, newVal);
-
-    hiddenSlider.setValue (newVal, juce::sendNotification);
-    repaint();
-}
-
-void FlopsterSlider::mouseUp (const juce::MouseEvent&)
-{
-    isDragging = false;
-    repaint();
-}
-
-void FlopsterSlider::mouseDoubleClick (const juce::MouseEvent&)
-{
-    if (auto* param = apvts.getParameter (paramID))
-    {
-        float def = param->getDefaultValue();
-        hiddenSlider.setValue (def, juce::sendNotification);
-    }
-    repaint();
-}
-
-void FlopsterSlider::refreshValue()
-{
-    repaint();
-}
+//==============================================================================
+// FlopsterSlider is now fully defined in PluginEditor.h
+//==============================================================================
 
 //==============================================================================
 // PixelKeyboard
@@ -288,17 +230,10 @@ void PixelKeyboard::paint (juce::Graphics& g)
 {
     if (numWhiteKeys == 0) return;
 
-    const juce::Colour bgCol        (10,  5,  8);
-    const juce::Colour borderCol    (220, 90, 128);
-    const juce::Colour whiteNormal  (30,  10, 15);
-    const juce::Colour whitePressed (220, 90, 128);
-    const juce::Colour blackNormal  (10,  5,  8);
-    const juce::Colour blackPressed (180, 40, 80);
-    const juce::Colour labelCol     (220, 90, 128);
-    const juce::Colour labelColBlk  (255, 180, 200);
+
 
     // Background
-    g.fillAll (bgCol);
+    g.fillAll (thBg);
 
     // --- Draw white keys ---
     for (int i = 0; i < NUM_NOTES; ++i)
@@ -310,10 +245,10 @@ void PixelKeyboard::paint (juce::Graphics& g)
         if (r.isEmpty()) continue;
 
         bool pressed = activeNotes[note];
-        g.setColour (pressed ? whitePressed : whiteNormal);
+        g.setColour (pressed ? thAccent : thBgDark);
         g.fillRect  (r.reduced (1.0f, 1.0f));
 
-        g.setColour (borderCol);
+        g.setColour (thAccent);
         g.drawRect  (r, 1.0f);
     }
 
@@ -327,10 +262,10 @@ void PixelKeyboard::paint (juce::Graphics& g)
         if (r.isEmpty()) continue;
 
         bool pressed = activeNotes[note];
-        g.setColour (pressed ? blackPressed : blackNormal);
+        g.setColour (pressed ? thBgDark : thBg);
         g.fillRect  (r);
 
-        g.setColour (borderCol);
+        g.setColour (thAccent);
         g.drawRect  (r, 1.0f);
     }
 
@@ -349,7 +284,7 @@ void PixelKeyboard::paint (juce::Graphics& g)
             if (r.isEmpty()) continue;
 
             bool black = isBlackKey (note);
-            g.setColour (black ? labelColBlk : labelCol);
+            g.setColour (black ? thLit : thAccent);
 
             // Position label near bottom of key
             float labelH = 10.0f;
@@ -506,15 +441,15 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     // -------------------------------------------------------------------------
     // Preset bar
     presetLabel = std::make_unique<juce::Label> ("presetLabel", "Preset:");
-    presetLabel->setColour (juce::Label::textColourId, juce::Colour (220, 90, 128));
+    presetLabel->setColour (juce::Label::textColourId, juce::Colour (35, 46, 209));
     presetLabel->setFont (juce::Font (juce::FontOptions (11.0f)));
     addAndMakeVisible (*presetLabel);
 
     presetBox = std::make_unique<juce::ComboBox> ("presetBox");
-    presetBox->setColour (juce::ComboBox::backgroundColourId, juce::Colours::black);
-    presetBox->setColour (juce::ComboBox::textColourId,       juce::Colour (220, 90, 128));
-    presetBox->setColour (juce::ComboBox::outlineColourId,    juce::Colour (220, 90, 128));
-    presetBox->setColour (juce::ComboBox::arrowColourId,      juce::Colour (220, 90, 128));
+    presetBox->setColour (juce::ComboBox::backgroundColourId, juce::Colour (13, 19, 23));
+    presetBox->setColour (juce::ComboBox::textColourId,       juce::Colour (35, 46, 209));
+    presetBox->setColour (juce::ComboBox::outlineColourId,    juce::Colour (35, 46, 209));
+    presetBox->setColour (juce::ComboBox::arrowColourId,      juce::Colour (35, 46, 209));
     presetBox->setTextWhenNothingSelected ("-- select preset --");
 
     for (int i = 0; i < NUM_PROGRAMS; ++i)
@@ -531,13 +466,44 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
         if (id > 0)
         {
             processorRef.setCurrentProgram (id - 1);
-            // Immediately update the UI images for the selected preset so the
-            // pixel-art UI reflects the newly chosen pack without waiting for
-            // the audio-thread-safe sample load.
             loadImagesFromPreset (presetBox->getText());
         }
     };
     addAndMakeVisible (*presetBox);
+
+    // -------------------------------------------------------------------------
+    // Save / Load preset buttons
+    btnSavePreset = std::make_unique<juce::TextButton> ("Save");
+    btnLoadPreset = std::make_unique<juce::TextButton> ("Load");
+
+    auto stylePresetBtn = [](juce::TextButton& btn)
+    {
+        btn.setColour (juce::TextButton::buttonColourId,  juce::Colour (16, 29, 66));
+        btn.setColour (juce::TextButton::textColourOffId, juce::Colour (35, 46, 209));
+        btn.setColour (juce::ComboBox::outlineColourId,   juce::Colour (35, 46, 209));
+    };
+    stylePresetBtn (*btnSavePreset);
+    stylePresetBtn (*btnLoadPreset);
+
+    btnSavePreset->onClick = [this] { savePresetToFile(); };
+    btnLoadPreset->onClick = [this] { loadPresetFromFile(); };
+
+    addAndMakeVisible (*btnSavePreset);
+    addAndMakeVisible (*btnLoadPreset);
+
+    // -------------------------------------------------------------------------
+    // Voice count button: cycles 1 / 2 / 3 FDD voices
+    auto voiceLabel = [](int n) -> juce::String { return juce::String(n) + "x FDD"; };
+    btnVoices = std::make_unique<juce::TextButton> (voiceLabel (processorRef.numVoices));
+    btnVoices->setColour (juce::TextButton::buttonColourId,  juce::Colour (16, 29, 66));
+    btnVoices->setColour (juce::TextButton::textColourOffId, juce::Colour (35, 46, 209));
+    btnVoices->setColour (juce::ComboBox::outlineColourId,   juce::Colour (35, 46, 209));
+    btnVoices->onClick = [this, voiceLabel]
+    {
+        processorRef.numVoices = (processorRef.numVoices % MAX_VOICES) + 1;
+        btnVoices->setButtonText (voiceLabel (processorRef.numVoices));
+    };
+    addAndMakeVisible (*btnVoices);
 
     // -------------------------------------------------------------------------
     // Pixel keyboard
@@ -553,6 +519,7 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
 
     // Key labels are only shown in standalone (computer keyboard plays notes).
     pixelKeyboard->setShowKeyLabels (isStandalone);
+    pixelKeyboard->setOctaveOffset (kbOctaveOffset);
     addAndMakeVisible (*pixelKeyboard);
 
     // -------------------------------------------------------------------------
@@ -560,32 +527,35 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     // octave offset. Only functional in standalone mode.
     btnOctaveDown = std::make_unique<juce::TextButton> ("-");
     btnOctaveUp   = std::make_unique<juce::TextButton> ("+");
-    lblOctave     = std::make_unique<juce::Label> ("octLbl", "Oct: 0");
+    lblOctave     = std::make_unique<juce::Label> ("octLbl", "Oct: -1");
 
     auto styleOctBtn = [&](juce::TextButton& btn)
     {
-        btn.setColour (juce::TextButton::buttonColourId,   juce::Colours::black);
-        btn.setColour (juce::TextButton::textColourOffId,  juce::Colour (220, 90, 128));
-        btn.setColour (juce::ComboBox::outlineColourId,    juce::Colour (220, 90, 128));
+        btn.setColour (juce::TextButton::buttonColourId,   juce::Colour (16, 29, 66));
+        btn.setColour (juce::TextButton::textColourOffId,  juce::Colour (35, 46, 209));
+        btn.setColour (juce::ComboBox::outlineColourId,    juce::Colour (35, 46, 209));
         btn.addListener (this);
     };
     styleOctBtn (*btnOctaveDown);
     styleOctBtn (*btnOctaveUp);
 
-    lblOctave->setColour (juce::Label::textColourId, juce::Colour (220, 90, 128));
+    lblOctave->setColour (juce::Label::textColourId, juce::Colour (35, 46, 209));
     lblOctave->setFont (juce::Font (juce::FontOptions (11.0f)));
     lblOctave->setJustificationType (juce::Justification::centred);
 
-    // Dim them visually in plugin mode to signal they have no effect
-    if (! isStandalone)
-    {
-        btnOctaveDown->setAlpha (0.4f);
-        btnOctaveUp  ->setAlpha (0.4f);
-    }
+    // Only show octave controls in standalone mode
+    btnOctaveDown->setVisible (isStandalone);
+    btnOctaveUp  ->setVisible (isStandalone);
+    lblOctave    ->setVisible (isStandalone);
 
     addAndMakeVisible (*btnOctaveDown);
     addAndMakeVisible (*btnOctaveUp);
     addAndMakeVisible (*lblOctave);
+
+    // Sync initial octave offset with the processor and piano
+    processorRef.kbOctaveOffset = kbOctaveOffset;
+
+
 
     // -------------------------------------------------------------------------
     // Keyboard focus so we receive key events for MIDI input (standalone only).
@@ -593,21 +563,49 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     buildKbMap();
 
     // -------------------------------------------------------------------------
-    // Window size
-    int bgW = bgImage.isValid() ? bgImage.getWidth()  : (420 / GUI_SCALE);
-    int bgH = bgImage.isValid() ? bgImage.getHeight() : (220 / GUI_SCALE);
+    // Normalize button (default ON)
+    btnNormalize = std::make_unique<juce::TextButton> ("Norm: ON");
+    btnNormalize->setColour (juce::TextButton::buttonColourId,   juce::Colour (16, 29, 66));
+    btnNormalize->setColour (juce::TextButton::textColourOffId,  juce::Colour (35, 46, 209));
+    btnNormalize->setColour (juce::ComboBox::outlineColourId,    juce::Colour (35, 46, 209));
+    btnNormalize->onClick = [this]
+    {
+        processorRef.normalizeSamples = ! processorRef.normalizeSamples;
+        btnNormalize->setButtonText (processorRef.normalizeSamples ? "Norm: ON" : "Norm: OFF");
+        // Force sample reload with new normalization setting
+        processorRef.currentProgramLoaded = -1;
+        processorRef.sampleLoadNeeded     = true;
+    };
+    addAndMakeVisible (*btnNormalize);
 
-    static constexpr int PRESET_BAR_H  = 28;   // unscaled logical pixels
-    static constexpr int KEYBOARD_H    = 96;    // absolute pixels (no extra scaling)
-    static constexpr int CREDITS_H     = 18;    // absolute pixels
+    // -------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // CRT overlay — must be added LAST so it sits on top of all other children.
+    crtOverlay = std::make_unique<CrtOverlay>();
+    {
+        // Load scanlines.png from the assets directory
+        juce::File assetsDir = p.pluginDir.getChildFile ("assets");
+        juce::File scanlinesFile = assetsDir.getChildFile ("scanlines.png");
+        if (scanlinesFile.existsAsFile())
+        {
+            juce::Image sl = juce::ImageFileFormat::loadFrom (scanlinesFile);
+            if (sl.isValid())
+                crtOverlay->setScanlinesImage (sl);
+        }
+    }
+    // crtOverlay is NOT added as a visible child — it is drawn directly in
+    // paintOverChildren() so it is guaranteed to composite above every widget.
 
-    int totalW = bgW * GUI_SCALE;
-    int totalH = bgH * GUI_SCALE + PRESET_BAR_H + KEYBOARD_H + CREDITS_H;
+    // Fixed window size — layout is fully code-driven, no bitmap dependency.
+    static constexpr int PRESET_BAR_H = 28;
+    static constexpr int KEYBOARD_H   = 96;
+    static constexpr int CREDITS_H    = 18;
 
-    setSize (totalW, totalH);
+    setSize (MAIN_W, MAIN_H + PRESET_BAR_H + KEYBOARD_H + CREDITS_H);
 
-    // Load images for the initially selected preset — must be after setSize()
-    // so that resized() finds all child components already constructed.
+    // Apply the colour theme for the initial preset, then load images.
+    // Both must happen after setSize() so all child components exist.
+    applyTheme (processorRef.getCurrentProgram());
     if (presetBox->getSelectedId() > 0)
         loadImagesFromPreset (presetBox->getText());
 
@@ -723,11 +721,78 @@ void FlopsterAudioProcessorEditor::loadImagesFromPreset (const juce::String& pre
         charH = 12;
     }
 
-    // Reflow UI and trigger repaint so changes are visible immediately.
+    // Push the updated char sheet to all slider widgets so they repaint correctly.
+    for (auto* s : { sliderHeadStep.get(), sliderHeadSeek.get(), sliderHeadBuzz.get(),
+                     sliderSpindle.get(),  sliderNoises.get(),   sliderDetune.get(),
+                     sliderOctave.get(),   sliderOutput.get() })
+        if (s) s->setCharSheet (charImage);
+
+    // Apply the colour theme for the newly loaded preset, then reflow + repaint.
+    applyTheme (processorRef.getCurrentProgram());
     resized();
     repaint();
 }
 
+//==============================================================================
+void FlopsterAudioProcessorEditor::savePresetToFile()
+{
+    fileChooser = std::make_unique<juce::FileChooser> (
+        "Save Flopster Preset",
+        juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+        "*.flopster");
+
+    fileChooser->launchAsync (
+        juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+        [this] (const juce::FileChooser& fc)
+        {
+            auto result = fc.getResult();
+            if (result == juce::File{}) return;   // user cancelled
+
+            // Ensure .flopster extension
+            juce::File target = result.withFileExtension ("flopster");
+
+            juce::MemoryBlock data;
+            processorRef.getStateInformation (data);
+
+            if (! target.replaceWithData (data.getData(), data.getSize()))
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::AlertWindow::WarningIcon,
+                    "Save Failed",
+                    "Could not write to: " + target.getFullPathName());
+        });
+}
+
+void FlopsterAudioProcessorEditor::loadPresetFromFile()
+{
+    fileChooser = std::make_unique<juce::FileChooser> (
+        "Load Flopster Preset",
+        juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+        "*.flopster");
+
+    fileChooser->launchAsync (
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+        [this] (const juce::FileChooser& fc)
+        {
+            auto result = fc.getResult();
+            if (result == juce::File{}) return;   // user cancelled
+            if (! result.existsAsFile())  return;
+
+            juce::MemoryBlock data;
+            if (! result.loadFileAsData (data))
+            {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::AlertWindow::WarningIcon,
+                    "Load Failed",
+                    "Could not read: " + result.getFullPathName());
+                return;
+            }
+
+            processorRef.setStateInformation (data.getData(), (int) data.getSize());
+            // editorNeedsPresetRefresh is now set; timerCallback will sync the UI.
+        });
+}
+
+//==============================================================================
 // Lightweight accessors for testing / tooling / external UI code.
 juce::Image FlopsterAudioProcessorEditor::getBackgroundImage() const
 {
@@ -754,17 +819,23 @@ PixelKeyboard* FlopsterAudioProcessorEditor::getPixelKeyboard() const
 //==============================================================================
 void FlopsterAudioProcessorEditor::buildKbMap()
 {
-    // Format: { juce::KeyPress::textChar, midiNote }
-    // Using character codes for printable keys.
-    // FL Studio layout (standard):
-    //   Lower row (white):  Z=C4 X=D4 C=E4 V=F4 B=G4 N=A4 M=B4 ,=C5 .=D5 /=E5
-    //   Lower row (black):  S=C#4 D=D#4 G=F#4 H=G#4 J=A#4 L=C#5 ;=D#5
-    //   Upper row (white):  Q=C5 W=D5 E=E5 R=F5 T=G5 Y=A5 U=B5 I=C6 O=D6 P=E6
-    //   Upper row (black):  2=C#5 3=D#5 5=F#5 6=G#5 7=A#5 9=C#6 0=D#6
+    // FL Studio QWERTY keyboard mapping.
+    // Each entry maps ONE keycode (the JUCE KeyPress code, which for printable
+    // ASCII equals the character code) to a MIDI note.
+    // We track held notes by keyCode (not midiNote) so two keys that produce
+    // the same note (e.g. Q and , both = C5) are tracked independently and
+    // never fire a double note-on.
+    //
+    // Standard layout (C4 = MIDI 60):
+    //   Bottom row  Z../ → C4..E5  (white keys)
+    //   Middle row  S,D,G,H,J,L,; → C#4..D#5 (black keys)
+    //   Top row     Q..] → C5..A#5 (white + black via number row)
+    //   Number row  1..= → black keys for top row
 
-    struct Entry { int ch; int note; };
+    struct Entry { int keyCode; int note; };
+
     static const Entry entries[] = {
-        // Lower white keys (Z row)
+        // ── Bottom row — white keys C4..E5
         { 'z', 60 }, // C4
         { 'x', 62 }, // D4
         { 'c', 64 }, // E4
@@ -775,7 +846,8 @@ void FlopsterAudioProcessorEditor::buildKbMap()
         { ',', 72 }, // C5
         { '.', 74 }, // D5
         { '/', 76 }, // E5
-        // Lower black keys (S row)
+
+        // ── Middle row — black keys C#4..D#5
         { 's', 61 }, // C#4
         { 'd', 63 }, // D#4
         { 'g', 66 }, // F#4
@@ -783,7 +855,8 @@ void FlopsterAudioProcessorEditor::buildKbMap()
         { 'j', 70 }, // A#4
         { 'l', 73 }, // C#5
         { ';', 75 }, // D#5
-        // Upper white keys (Q row)
+
+        // ── Top row — white keys C5..E6
         { 'q', 72 }, // C5
         { 'w', 74 }, // D5
         { 'e', 76 }, // E5
@@ -794,7 +867,10 @@ void FlopsterAudioProcessorEditor::buildKbMap()
         { 'i', 84 }, // C6
         { 'o', 86 }, // D6
         { 'p', 88 }, // E6
-        // Upper black keys (number row)
+        { '[', 89 }, // F6
+        { ']', 91 }, // G6
+
+        // ── Number row — black keys C#5..G#6
         { '2', 73 }, // C#5
         { '3', 75 }, // D#5
         { '5', 78 }, // F#5
@@ -802,11 +878,21 @@ void FlopsterAudioProcessorEditor::buildKbMap()
         { '7', 82 }, // A#5
         { '9', 85 }, // C#6
         { '0', 87 }, // D#6
+        { '-', 90 }, // F#6
+        { '=', 92 }, // G#6
     };
 
     kbMap.clear();
     for (auto& e : entries)
-        kbMap.push_back ({ e.ch, e.note });
+    {
+        KbMapping m;
+        m.midiNote    = e.note;
+        m.keyCodes[0] = e.keyCode;
+        m.keyCodes[1] = -1;
+        m.keyCodes[2] = -1;
+        m.keyCodes[3] = -1;
+        kbMap.push_back (m);
+    }
 }
 
 //==============================================================================
@@ -868,31 +954,11 @@ void FlopsterAudioProcessorEditor::sendRawNote (int midiNote, int velocity)
 }
 
 //==============================================================================
-bool FlopsterAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
+bool FlopsterAudioProcessorEditor::keyPressed (const juce::KeyPress& /*key*/)
 {
-    // Computer keyboard MIDI input is standalone-only.
+    // We handle everything via polling in pollKeyboard() / timerCallback().
+    // Just return false so JUCE keeps delivering keyStateChanged events.
     if (! isStandalone) return false;
-
-    int ch = key.getTextCharacter();
-    // Convert uppercase to lowercase for letter keys
-    if (ch >= 'A' && ch <= 'Z') ch += 32;
-
-    for (auto& m : kbMap)
-    {
-        if (m.keyCode == ch)
-        {
-            // Only send note-on if not already held (no repeat)
-            if (heldKbNotes.find (m.midiNote) == heldKbNotes.end())
-            {
-                heldKbNotes[m.midiNote] = ch;
-                sendNote (m.midiNote, 80);
-                // Also record the shifted note so releaseAllKbNotes can send the
-                // exact note-off that matches what was actually played.
-                heldKbShiftedNotes[m.midiNote] = m.midiNote + kbOctaveOffset;
-            }
-            return true;
-        }
-    }
     return false;
 }
 
@@ -900,35 +966,72 @@ bool FlopsterAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 bool FlopsterAudioProcessorEditor::keyStateChanged (bool /*isKeyDown*/)
 {
     if (! isStandalone) return false;
-    checkKeyboardReleases();
-    return false;
+    pollKeyboard();
+    return true;  // consume so no other component interferes
 }
 
 //==============================================================================
 void FlopsterAudioProcessorEditor::releaseAllKbNotes()
 {
-    // Unconditionally send note-off for every held key and clear the maps.
-    // We must send note-off for the SHIFTED note that was actually played,
-    // not the raw note — otherwise the host/processor never sees the matching
-    // note-off and the note stays stuck.
-    for (auto& kv : heldKbNotes)
+    // heldKbShiftedNotes is keyed by keyCode → shifted midiNote
+    for (auto& kv : heldKbShiftedNotes)
     {
-        int rawNote     = kv.first;
-        int shiftedNote = rawNote + kbOctaveOffset;   // fallback
-        auto it = heldKbShiftedNotes.find (rawNote);
-        if (it != heldKbShiftedNotes.end())
-            shiftedNote = it->second;
-
-        // Send note-off bypassing the offset (note is already shifted)
+        int shiftedNote = kv.second;
         processorRef.kbOctaveOffset = 0;
         processorRef.injectMidiNote (shiftedNote, 0);
         processorRef.kbOctaveOffset = kbOctaveOffset;
-
         pixelKeyboard->setNoteActive (shiftedNote, false, 0);
     }
-
     heldKbNotes.clear();
     heldKbShiftedNotes.clear();
+}
+
+//==============================================================================
+void FlopsterAudioProcessorEditor::pollKeyboard()
+{
+    if (! isStandalone) return;
+
+    // Poll every mapped key independently by its keyCode.
+    // We track state per keyCode (not per midiNote) so two keys that map to
+    // the same note (e.g. Q and , both produce C5) are handled independently
+    // and never cause a spurious double note-on or stuck note.
+
+    for (auto& m : kbMap)
+    {
+        // Only keyCodes[0] is used in the simplified QWERTY-only map.
+        int code = m.keyCodes[0];
+        if (code < 0) continue;
+
+        bool physicallyDown = juce::KeyPress (code).isCurrentlyDown();
+
+        // Use keyCode as the map key, not midiNote.
+        bool wasDown = (heldKbNotes.count (code) > 0);
+
+        if (physicallyDown && ! wasDown)
+        {
+            // Key just pressed — send note-on
+            heldKbNotes[code] = true;
+            int shifted = m.midiNote + kbOctaveOffset;
+            heldKbShiftedNotes[code] = shifted;
+            processorRef.kbOctaveOffset = 0;
+            processorRef.injectMidiNote (shifted, 80);
+            processorRef.kbOctaveOffset = kbOctaveOffset;
+            pixelKeyboard->setNoteActive (shifted, true, 80);
+        }
+        else if (! physicallyDown && wasDown)
+        {
+            // Key just released — send note-off
+            int shifted = heldKbShiftedNotes.count (code)
+                              ? heldKbShiftedNotes[code]
+                              : m.midiNote + kbOctaveOffset;
+            heldKbNotes.erase (code);
+            heldKbShiftedNotes.erase (code);
+            processorRef.kbOctaveOffset = 0;
+            processorRef.injectMidiNote (shifted, 0);
+            processorRef.kbOctaveOffset = kbOctaveOffset;
+            pixelKeyboard->setNoteActive (shifted, false, 0);
+        }
+    }
 }
 
 //==============================================================================
@@ -948,42 +1051,7 @@ void FlopsterAudioProcessorEditor::visibilityChanged()
 }
 
 //==============================================================================
-void FlopsterAudioProcessorEditor::checkKeyboardReleases()
-{
-    // Walk through all held notes; if the key that triggered them is no longer
-    // down according to the OS, send a note-off.
-    // NOTE: isCurrentlyDown() is unreliable when the window has lost focus, so
-    // focusLost() is the primary safety net.  This function handles the case
-    // where individual keys are released while focus is still held.
-    std::vector<int> toRelease;
-    for (auto& kv : heldKbNotes)
-    {
-        int midiNote = kv.first;
-        int ch       = kv.second;
 
-        juce::KeyPress kp (ch);
-        if (! kp.isCurrentlyDown())
-            toRelease.push_back (midiNote);
-    }
-    for (int rawNote : toRelease)
-    {
-        // Find the shifted note that was actually played at press time
-        int shiftedNote = rawNote + kbOctaveOffset;  // fallback
-        auto it = heldKbShiftedNotes.find (rawNote);
-        if (it != heldKbShiftedNotes.end())
-            shiftedNote = it->second;
-
-        heldKbNotes.erase (rawNote);
-        heldKbShiftedNotes.erase (rawNote);
-
-        // Send note-off for the exact shifted note
-        processorRef.kbOctaveOffset = 0;
-        processorRef.injectMidiNote (shiftedNote, 0);
-        processorRef.kbOctaveOffset = kbOctaveOffset;
-
-        pixelKeyboard->setNoteActive (shiftedNote, false, 0);
-    }
-}
 
 //==============================================================================
 void FlopsterAudioProcessorEditor::globalFocusChanged (juce::Component* focusedComponent)
@@ -1000,14 +1068,25 @@ void FlopsterAudioProcessorEditor::globalFocusChanged (juce::Component* focusedC
 void FlopsterAudioProcessorEditor::timerCallback()
 {
     // ---- Service deferred sample loads (preset change or initial load) ----
-    // loadAllSamples() must only be called on the message thread, never from
-    // the audio thread.  The processor sets sampleLoadNeeded = true to request
-    // a reload; we pick it up here on every timer tick.
     if (processorRef.sampleLoadNeeded.load())
         processorRef.loadAllSamples();
 
-    if (processorRef.guiNeedsUpdate.exchange (false))
-        repaint();
+    // ---- Sync preset box + images after DAW project reload ----
+    if (processorRef.editorNeedsPresetRefresh.exchange (false))
+    {
+        int prog = processorRef.getCurrentProgram();
+        presetBox->setSelectedId (prog + 1, juce::dontSendNotification);
+        juce::String name = processorRef.programNames[prog];
+        if (name != "empty")
+            loadImagesFromPreset (name);
+    }
+
+    // Decay VU meters each tick (30 Hz → ~0.85^30 ≈ 0.01 in 1 s) and repaint
+    processorRef.meterL.store (processorRef.meterL.load() * 0.82f);
+    processorRef.meterR.store (processorRef.meterR.load() * 0.82f);
+
+    processorRef.guiNeedsUpdate.exchange (false);
+    repaint();
 
     sliderHeadStep->refreshValue();
     sliderHeadSeek->refreshValue();
@@ -1018,187 +1097,308 @@ void FlopsterAudioProcessorEditor::timerCallback()
     sliderOctave  ->refreshValue();
     sliderOutput  ->refreshValue();
 
-    // Also check for key releases (in case keyStateChanged was missed).
-    // Skip in plugin mode — we never hold keyboard notes there.
+    // Poll keyboard every timer tick — catches missed keyStateChanged events
+    // (e.g. rapid key releases, focus-loss edge cases).
     if (isStandalone)
-        checkKeyboardReleases();
-}
-
-//==============================================================================
-void FlopsterAudioProcessorEditor::renderChar (juce::Graphics& g,
-                                               int pixelX, int pixelY,
-                                               int charIndex)
-{
-    if (! charImage.isValid()) return;
-    if (charIndex < 0)  charIndex = 0;
-    if (charIndex > 18) charIndex = 18;
-
-    juce::Rectangle<int> src (charIndex * charW,      0,                charW,            charH);
-    juce::Rectangle<int> dst (pixelX    * GUI_SCALE,  pixelY * GUI_SCALE, charW * GUI_SCALE, charH * GUI_SCALE);
-
-    g.drawImage (charImage,
-                 dst.getX(), dst.getY(), dst.getWidth(), dst.getHeight(),
-                 src.getX(), src.getY(), src.getWidth(), src.getHeight(),
-                 false);
-}
-
-//==============================================================================
-void FlopsterAudioProcessorEditor::renderHead (juce::Graphics& g,
-                                               int sx, int sy, int w, int h,
-                                               int pos)
-{
-    int hh = 16;
-    int hy = sy + (h - hh) * pos / 80;
-
-    g.setColour (juce::Colours::black);
-
-    if (hy > sy)
-        g.fillRect (sx, sy, w, hy - sy);
-
-    int belowY = hy + hh;
-    if (belowY < sy + h)
-        g.fillRect (sx, belowY, w, (sy + h) - belowY);
+        pollKeyboard();
 }
 
 //==============================================================================
 void FlopsterAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    const int bgW = bgImage.isValid() ? bgImage.getWidth()  : (getWidth()  / GUI_SCALE);
-    // Use the same logical background height fallback as in the constructor:
-    // if there's no background image, assume the original design height (220)
-    // in logical pixels (unscaled). Using getHeight()/GUI_SCALE pushed the
-    // preset/keyb area below the visible window.
-    const int bgH = bgImage.isValid() ? bgImage.getHeight() : (220 / GUI_SCALE);
+    const int W = MAIN_W;
 
-    // --- 1. Draw background scaled (nearest-neighbour for pixel-art look) ---
-    if (bgImage.isValid())
+    // ── layout helpers (must match resized()) ─────────────────────────────────
+    static constexpr int SL_W  = 80;
+    static constexpr int ROW_H = 28;
+    const int slW    = SL_W;
+    const int rowH   = ROW_H;
+    const int labW   = 88;
+    const int sAreaX = 192;
+    const int col2X  = sAreaX + labW + slW + 14;
+    const int startY = 16;
+
+    // LED / VU zone constants
+    static constexpr int LED_X    = 8;
+    static constexpr int LED_Y    = 28;
+    static constexpr int LED_ROW  = 20;
+    static constexpr int MTR_X    = 8;
+    static constexpr int MTR_Y    = 140;
+    static constexpr int MTR_W    = 140;
+    // Head indicator zone
+    static constexpr int HI_X     = 158;
+    static constexpr int HI_Y     = 8;
+    static constexpr int HI_W     = 22;
+    static constexpr int HI_H     = MAIN_H - 16;   // 244
+    static constexpr int HI_IND   = 18;             // indicator block height
+
+    // ── Grab current theme once ───────────────────────────────────────────────
+    const auto& t = currentTheme();
+
+    // ── 1. Background ─────────────────────────────────────────────────────────
+    g.setColour (t.bg);
+    g.fillAll();
+
+    // ── 2. Title ──────────────────────────────────────────────────────────────
+    g.setColour (t.accent);
+    g.setFont (juce::Font (juce::FontOptions (11.0f).withStyle ("Bold")));
+    g.drawText ("FLOPSTER  " FLOPSTER_VERSION,
+                LED_X, 4, 200, 14, juce::Justification::left, false);
+
+    // ── 3. LED indicators ─────────────────────────────────────────────────────
+    const auto& fdd = processorRef.FDD[processorRef.displayVoice];
+    struct LedRow { const char* label; bool lit; };
+    const LedRow leds[] = {
+        { "STEP",  fdd.sample_type == SAMPLE_TYPE_STEP },
+        { "SEEK",  ! fdd.head_sample_loop_done && fdd.sample_type == SAMPLE_TYPE_SEEK },
+        { "BUZZ",  ! fdd.head_sample_loop_done && fdd.sample_type == SAMPLE_TYPE_BUZZ },
+        { "SPNL",  fdd.spindle_enable },
+        { "NOISE", fdd.sample_type == SAMPLE_TYPE_NOISE },
+    };
+
+    g.setFont (juce::Font (juce::FontOptions (9.0f)));
+    for (int i = 0; i < 5; ++i)
     {
-        g.drawImage (bgImage,
-                     0, 0, bgW * GUI_SCALE, bgH * GUI_SCALE,
-                     0, 0, bgW, bgH,
-                     false);
-    }
-    else
-    {
-        g.setColour (juce::Colour (40, 10, 20));
-        g.fillRect (0, 0, bgW * GUI_SCALE, bgH * GUI_SCALE);
-    }
-
-    // --- 2. LED indicators ---
-    const auto& fdd = processorRef.FDD;
-
-    renderChar (g, 27, 1,
-                (fdd.sample_type == SAMPLE_TYPE_STEP) ? 16 : 17);
-    renderChar (g, 27, 2,
-                (!fdd.head_sample_loop_done && fdd.sample_type == SAMPLE_TYPE_SEEK) ? 16 : 17);
-    renderChar (g, 27, 3,
-                (!fdd.head_sample_loop_done && fdd.sample_type == SAMPLE_TYPE_BUZZ) ? 16 : 17);
-    renderChar (g, 27, 4,
-                fdd.spindle_enable ? 16 : 17);
-    renderChar (g, 27, 5,
-                (fdd.sample_type == SAMPLE_TYPE_NOISE) ? 16 : 17);
-
-    // --- 3. Head position indicator ---
-    {
-        int pos = fdd.head_pos;
-        if (pos >= 80) pos = 159 - pos;
-        if (pos < 0)   pos = 0;
-        if (pos > 79)  pos = 79;
-
-        int hx = (10 * charW + charW / 2) * GUI_SCALE;
-        int hy = (7  * charH + charH / 4) * GUI_SCALE;
-        int hw = (charW * 2)              * GUI_SCALE;
-        int hh = (charH * 3)              * GUI_SCALE;
-
-        renderHead (g, hx, hy, hw, hh, pos);
-    }
-
-    // --- 4. Plugin title / version if no BG image ---
-    if (! bgImage.isValid())
-    {
-        g.setColour (juce::Colour (220, 90, 128));
-        g.setFont (juce::Font (juce::FontOptions (16.0f).withStyle ("Bold")));
-        g.drawText ("FLOPSTER  v1.21", 8, 4, getWidth() - 16, 20,
-                    juce::Justification::left);
-        g.setFont (juce::Font (juce::FontOptions (10.0f)));
-        g.drawText ("by Shiru", 8, 22, getWidth() - 16, 14,
-                    juce::Justification::left);
-    }
-
-    // --- 5. Preset bar background ---
-    {
-        int bgH_px = bgH * GUI_SCALE;
-        int presetH = presetBox->getBottom() + 2 - bgH_px;
-        if (presetH < 0) presetH = 28;
-        g.setColour (juce::Colours::black);
-        g.fillRect (0, bgH_px, getWidth(), presetBox->getBottom() + 4 - bgH_px);
+        int ly = LED_Y + i * LED_ROW;
+        juce::Colour ledFill = leds[i].lit ? t.lit : t.bgDark;
+        g.setColour (ledFill);
+        g.fillRect (LED_X, ly + 4, 8, 8);
+        g.setColour (t.accent);
+        g.drawRect  ((float)LED_X, (float)(ly + 4), 8.0f, 8.0f, 1.0f);
+        g.drawText  (leds[i].label, LED_X + 12, ly, 60, LED_ROW,
+                     juce::Justification::left, false);
     }
 
-    // --- 6. Credits bar at very bottom ---
+    // ── 4. VU meters ──────────────────────────────────────────────────────────
     {
-        int creditsY = getHeight() - 18;
-        g.setColour (juce::Colours::black);
-        g.fillRect (0, creditsY, getWidth(), 18);
+        float levL = juce::jlimit (0.0f, 1.0f, processorRef.meterL.load());
+        float levR = juce::jlimit (0.0f, 1.0f, processorRef.meterR.load());
 
-        g.setColour (juce::Colour (220, 90, 128));
-        g.setFont (juce::Font (juce::FontOptions (9.0f)));
-        g.drawText ("Flopster  by Shiru & Resonaura  \xe2\x80\x94  original samples by Shiru, macOS/VST3/AU port by Resonaura",
-                    4, creditsY, getWidth() - 8, 18,
-                    juce::Justification::centredLeft, false);
+        auto drawMeter = [&] (int y, float level, const char* label)
+        {
+            g.setFont (juce::Font (juce::FontOptions (8.0f)));
+            g.setColour (t.accent);
+            g.drawText (label, MTR_X, y, 10, 8, juce::Justification::centred, false);
+
+            int barX  = MTR_X + 12;
+            int barW  = MTR_W - 12;
+            int nSegs = barW / 4;
+            int nOn   = (int)(level * (float)nSegs);
+
+            for (int s = 0; s < nSegs; ++s)
+            {
+                bool on  = s < nOn;
+                bool hot = s >= nSegs * 3 / 4;
+                juce::Colour c = on ? (hot ? t.lit : t.accent) : t.bgDark;
+                g.setColour (c);
+                g.fillRect (barX + s * 4, y + 1, 3, 6);
+            }
+        };
+
+        drawMeter (MTR_Y,      levL, "L");
+        drawMeter (MTR_Y + 11, levR, "R");
     }
+
+    // ── 5. Head position indicators (one strip per active voice) ────────────
+    {
+        const int numV    = processorRef.numVoices;
+        const int stripW  = (HI_W - 2) / numV;   // divide available width
+
+        g.setColour (t.bgDark);
+        g.fillRect  (HI_X, HI_Y, HI_W, HI_H);
+        g.setColour (t.accent);
+        g.drawRect  ((float)HI_X, (float)HI_Y, (float)HI_W, (float)HI_H, 1.0f);
+
+        g.setFont   (juce::Font (juce::FontOptions (7.0f)));
+        g.setColour (t.accent);
+        g.drawText  ("HD", HI_X, HI_Y + HI_H - 10, HI_W, 9,
+                     juce::Justification::centred, false);
+
+        for (int v = 0; v < numV; ++v)
+        {
+            int pos = processorRef.FDD[v].head_pos;
+            if (pos >= 80) pos = 159 - pos;
+            pos = juce::jlimit (0, 79, pos);
+
+            int sx = HI_X + 1 + v * stripW;
+            int hy = HI_Y + 1 + (HI_H - 2 - HI_IND - 10) * pos / 79;
+            g.setColour (t.lit);
+            g.fillRect  (sx, hy, stripW - 1, HI_IND);
+        }
+    }
+
+    // ── 6. Slider labels ──────────────────────────────────────────────────────
+    g.setFont   (juce::Font (juce::FontOptions (9.0f)));
+    g.setColour (t.accent);
+
+    struct SLbl { const char* name; int col, row; };
+    const SLbl slbls[] = {
+        { "Head Step", 0, 0 }, { "Head Seek", 0, 1 },
+        { "Head Buzz", 0, 2 }, { "Spindle",   0, 3 },
+        { "Noises",    1, 0 }, { "Detune",    1, 1 },
+        { "Octave",    1, 2 }, { "Output",    1, 3 },
+    };
+    for (auto& sl : slbls)
+    {
+        int lx = (sl.col == 0) ? sAreaX : col2X;
+        int ly = startY + sl.row * rowH + (rowH - 10) / 2;
+        g.drawText (sl.name, lx, ly, labW - 4, 10,
+                    juce::Justification::left, false);
+    }
+
+    // Column separator
+    g.setColour (t.bgDark);
+    int sepX = col2X - 7;
+    g.drawLine ((float)sepX, (float)startY,
+                (float)sepX, (float)(startY + 4 * rowH), 1.0f);
+
+    // ── 7. Preset bar background ──────────────────────────────────────────────
+    g.setColour (t.bg);
+    g.fillRect  (0, MAIN_H, W, 32);
+    g.setColour (t.accent);
+    g.drawLine  (0.0f, (float)MAIN_H, (float)W, (float)MAIN_H, 1.0f);
+
+    // ── 8. Credits bar ────────────────────────────────────────────────────────
+    int creditsY = getHeight() - 18;
+    g.setColour (t.bg);
+    g.fillRect  (0, creditsY, W, 18);
+    g.setColour (t.accent);
+    g.setFont   (juce::Font (juce::FontOptions (9.0f)));
+    g.drawText  ("Flopster  by Shiru & Resonaura  \xe2\x80\x94  "
+                 "original samples by Shiru, macOS/VST3/AU port by Resonaura",
+                 4, creditsY, W - 8, 18,
+                 juce::Justification::centredLeft, false);
+}
+
+//==============================================================================
+void FlopsterAudioProcessorEditor::paintOverChildren (juce::Graphics& g)
+{
+    // The CRT overlay is NOT a child component — we draw it here so it is
+    // guaranteed to composite on top of every widget (sliders, keyboard, etc.).
+    if (crtOverlay)
+        crtOverlay->drawOnto (g, getLocalBounds().toFloat(),
+                              currentTheme().accent);
+}
+
+//==============================================================================
+void FlopsterAudioProcessorEditor::applyTheme (int programIndex)
+{
+    m_theme = getThemeForProgram (programIndex);
+    const auto& t = m_theme;
+
+    // ── Sliders ───────────────────────────────────────────────────────────────
+    for (auto* s : { sliderHeadStep.get(), sliderHeadSeek.get(),
+                     sliderHeadBuzz.get(), sliderSpindle.get(),
+                     sliderNoises.get(),   sliderDetune.get(),
+                     sliderOctave.get(),   sliderOutput.get() })
+        if (s) s->setThemeColors (t.bgDark, t.accent, t.lit);
+
+    // ── Buttons ───────────────────────────────────────────────────────────────
+    auto styleBtn = [&] (juce::TextButton* btn)
+    {
+        if (! btn) return;
+        btn->setColour (juce::TextButton::buttonColourId,  t.bgDark);
+        btn->setColour (juce::TextButton::textColourOffId, t.accent);
+        btn->setColour (juce::ComboBox::outlineColourId,   t.accent);
+    };
+    styleBtn (btnSavePreset.get());
+    styleBtn (btnLoadPreset.get());
+    styleBtn (btnVoices.get());
+    styleBtn (btnNormalize.get());
+    styleBtn (btnOctaveDown.get());
+    styleBtn (btnOctaveUp.get());
+
+    // ── Combo box ─────────────────────────────────────────────────────────────
+    if (presetBox)
+    {
+        presetBox->setColour (juce::ComboBox::backgroundColourId, t.bg);
+        presetBox->setColour (juce::ComboBox::textColourId,       t.accent);
+        presetBox->setColour (juce::ComboBox::outlineColourId,    t.accent);
+        presetBox->setColour (juce::ComboBox::arrowColourId,      t.accent);
+    }
+
+    // ── Labels ────────────────────────────────────────────────────────────────
+    if (presetLabel) presetLabel->setColour (juce::Label::textColourId, t.accent);
+    if (lblOctave)   lblOctave  ->setColour (juce::Label::textColourId, t.accent);
+
+    // ── Keyboard ──────────────────────────────────────────────────────────────
+    if (pixelKeyboard)
+        pixelKeyboard->setThemeColors (t.bg, t.bgDark, t.accent, t.lit);
+
+    repaint();
 }
 
 //==============================================================================
 void FlopsterAudioProcessorEditor::resized()
 {
-    // Match the constructor's fallback: logical bg height = 220 when no image.
-    const int bgH = bgImage.isValid() ? bgImage.getHeight() : (220 / GUI_SCALE);
+    // ── Slider grid ───────────────────────────────────────────────────────────
+    // Use fixed pixel sizes so the layout is stable regardless of charH.
+    // Each slider is 5 chars wide × 1 char tall, rendered to fill the bounds.
+    static constexpr int SL_W  = 80;   // fixed width  (5 × 16px chars)
+    static constexpr int SL_H  = 20;   // fixed height — compact, always fits
+    static constexpr int ROW_H = 28;   // row pitch (slider + gap)
 
-    // ---- Sliders: col 29, rows 1..10 of char-cell grid ----
-    int sx = 29 * charW * GUI_SCALE;
-    int sw =  5 * charW * GUI_SCALE;
-    int sh =      charH * GUI_SCALE;
+    const int slW    = SL_W;
+    const int slH    = SL_H;
+    const int rowH   = ROW_H;
+    const int labW   = 88;
+    const int sAreaX = 192;
+    const int col2X  = sAreaX + labW + slW + 14;
+    const int startY = 16;
 
-    auto sliderBounds = [&](int row) {
-        return juce::Rectangle<int> (sx, row * sh, sw, sh);
+    auto col = [&](int c, int r) {
+        int x = (c == 0) ? (sAreaX + labW) : (col2X + labW);
+        return juce::Rectangle<int> (x, startY + r * rowH, slW, slH);
     };
 
-    if (sliderHeadStep) sliderHeadStep->setBounds (sliderBounds (1));
-    if (sliderHeadSeek) sliderHeadSeek->setBounds (sliderBounds (2));
-    if (sliderHeadBuzz) sliderHeadBuzz->setBounds (sliderBounds (3));
-    if (sliderSpindle)  sliderSpindle ->setBounds (sliderBounds (4));
-    if (sliderNoises)   sliderNoises  ->setBounds (sliderBounds (5));
-    // row 6 blank
-    if (sliderDetune)   sliderDetune  ->setBounds (sliderBounds (7));
-    if (sliderOctave)   sliderOctave  ->setBounds (sliderBounds (8));
-    // row 9 blank
-    if (sliderOutput)   sliderOutput  ->setBounds (sliderBounds (10));
+    if (sliderHeadStep) sliderHeadStep->setBounds (col (0, 0));
+    if (sliderHeadSeek) sliderHeadSeek->setBounds (col (0, 1));
+    if (sliderHeadBuzz) sliderHeadBuzz->setBounds (col (0, 2));
+    if (sliderSpindle)  sliderSpindle ->setBounds (col (0, 3));
+    if (sliderNoises)   sliderNoises  ->setBounds (col (1, 0));
+    if (sliderDetune)   sliderDetune  ->setBounds (col (1, 1));
+    if (sliderOctave)   sliderOctave  ->setBounds (col (1, 2));
+    if (sliderOutput)   sliderOutput  ->setBounds (col (1, 3));
 
-    // ---- Preset bar ----
-    int presetBarY = bgH * GUI_SCALE;
-    int presetBarH = 28;
+    // ── Preset bar ────────────────────────────────────────────────────────────
+    static constexpr int PRESET_BAR_H  = 28;
+    static constexpr int PBTN_W        = 40;
+    static constexpr int VOICES_BTN_W  = 48;
+    static constexpr int NORM_BTN_W    = 62;
+    int presetBarY  = MAIN_H;
+    int normBtnX    = MAIN_W - (PBTN_W * 2 + VOICES_BTN_W + NORM_BTN_W + 10);
+    int voicesBtnX  = normBtnX + NORM_BTN_W + 2;
+    int saveBtnX    = voicesBtnX + VOICES_BTN_W + 2;
+    int loadBtnX    = saveBtnX + PBTN_W + 2;
 
-    if (presetLabel) presetLabel->setBounds (4,  presetBarY + 4, 44, presetBarH - 8);
-    if (presetBox)   presetBox  ->setBounds (50, presetBarY + 2, getWidth() - 54, presetBarH - 4);
+    if (presetLabel)   presetLabel  ->setBounds (4,  presetBarY + 4, 44, PRESET_BAR_H - 8);
+    if (presetBox)     presetBox    ->setBounds (50, presetBarY + 2, normBtnX - 54, PRESET_BAR_H - 4);
+    if (btnNormalize)  btnNormalize ->setBounds (normBtnX,  presetBarY + 2, NORM_BTN_W,   PRESET_BAR_H - 4);
+    if (btnVoices)     btnVoices    ->setBounds (voicesBtnX, presetBarY + 2, VOICES_BTN_W, PRESET_BAR_H - 4);
+    if (btnSavePreset) btnSavePreset->setBounds (saveBtnX,   presetBarY + 2, PBTN_W, PRESET_BAR_H - 4);
+    if (btnLoadPreset) btnLoadPreset->setBounds (loadBtnX,   presetBarY + 2, PBTN_W, PRESET_BAR_H - 4);
 
-    // ---- Pixel keyboard + octave controls ----
-    // Layout: [Oct-btn][Oct-label][Oct+btn] strip at left, then the keyboard
-    //         fills the rest.  The octave strip sits in the top portion of the
-    //         keyboard area to leave maximum height for the keys themselves.
-    int kbY = presetBarY + presetBarH;
-    int kbH = 96;
-
+    // ── Keyboard + octave strip ───────────────────────────────────────────────
+    static constexpr int KEYBOARD_H  = 96;
     static constexpr int OCT_STRIP_H = 22;
     static constexpr int OCT_BTN_W   = 24;
     static constexpr int OCT_LBL_W   = 56;
 
-    // Octave strip runs across the top of the keyboard area
-    if (btnOctaveDown) btnOctaveDown->setBounds (0,               kbY, OCT_BTN_W, OCT_STRIP_H);
-    if (lblOctave)     lblOctave    ->setBounds (OCT_BTN_W,        kbY, OCT_LBL_W, OCT_STRIP_H);
-    if (btnOctaveUp)   btnOctaveUp  ->setBounds (OCT_BTN_W + OCT_LBL_W, kbY, OCT_BTN_W, OCT_STRIP_H);
+    int kbY = presetBarY + PRESET_BAR_H;
 
-    // Piano keyboard sits below the strip
-    if (pixelKeyboard) pixelKeyboard->setBounds (0, kbY + OCT_STRIP_H, getWidth(), kbH - OCT_STRIP_H);
+    if (isStandalone)
+    {
+        if (btnOctaveDown) btnOctaveDown->setBounds (0, kbY, OCT_BTN_W, OCT_STRIP_H);
+        if (lblOctave)     lblOctave    ->setBounds (OCT_BTN_W, kbY, OCT_LBL_W, OCT_STRIP_H);
+        if (btnOctaveUp)   btnOctaveUp  ->setBounds (OCT_BTN_W + OCT_LBL_W, kbY, OCT_BTN_W, OCT_STRIP_H);
+        if (pixelKeyboard) pixelKeyboard->setBounds (0, kbY + OCT_STRIP_H,
+                                                     MAIN_W, KEYBOARD_H - OCT_STRIP_H);
+    }
+    else
+    {
+        // Plugin mode: no octave strip, keyboard fills full height
+        if (pixelKeyboard) pixelKeyboard->setBounds (0, kbY, MAIN_W, KEYBOARD_H);
+    }
 
-    // Credits bar is painted but needs no child widget
+    // CRT overlay is drawn in paintOverChildren() — no bounds needed here.
 }
