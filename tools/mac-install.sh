@@ -308,6 +308,21 @@ if [[ $INSTALL_AU -eq 1 ]]; then
     fi
 fi
 
+# ── 7b. Refresh AU cache ───────────────────────────────────────────────────────
+if [[ $INSTALL_AU -eq 1 ]]; then
+    step "🔄 Refreshing AU cache..."
+    ruler
+    chflags -R nouchg "$HOME/Library/Audio/Plug-Ins" 2>/dev/null || true
+    if command -v pluginkit &>/dev/null; then
+        pluginkit -e use    -i com.shiru.flopster 2>/dev/null || true
+        pluginkit -e ignore -i com.shiru.flopster 2>/dev/null || true
+        pluginkit -e use    -i com.shiru.flopster 2>/dev/null || true
+        ok "pluginkit cache updated"
+    fi
+    killall -9 coreaudiod 2>/dev/null || true
+    ok "coreaudiod restarted — Logic / GarageBand will see the plugin on next launch"
+fi
+
 # ── 8. Summary ────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${CYN}${BLD}╔══════════════════════════════════════════════╗${NC}"
