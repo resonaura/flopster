@@ -18,11 +18,11 @@ function runCommand(cmd, args, opts = {}) {
   const res = spawnSync(
     cmd,
     args,
-    Object.assign({ stdio: "inherit", cwd: ROOT_DIR }, opts),
+    Object.assign({ stdio: "inherit", cwd: ROOT_DIR, shell: true }, opts),
   );
   if (res.error) {
     console.error(`❌  Failed to run ${cmd}: ${res.error.message}`);
-    return { ok: false, status: 1 };
+    return { ok: false, status: 1, notFound: res.error.code === "ENOENT" };
   }
   return { ok: res.status === 0, status: res.status };
 }
@@ -44,8 +44,11 @@ if (fs.existsSync(path.join(JUCE_DIR, "modules"))) {
   ]);
 
   if (!result.ok) {
-    if (result.status === 127) {
-      console.error("❌  git not found. Install Git and re-run npm install.");
+    if (result.notFound || result.status === 127 || result.status === 9009) {
+      console.error("❌  git not found in PATH.");
+      console.error("    Install Git from https://git-scm.com/download/win");
+      console.error('    Make sure to check "Add Git to PATH" during install,');
+      console.error("    then open a new terminal and re-run: npm install");
     } else {
       console.error(
         "❌  Failed to clone JUCE. Check your internet connection.",
@@ -100,9 +103,7 @@ try {
 
   // Copy to repo root so it survives build-directory rebuilds
   fs.copyFileSync(buildCompileDb, rootCompileDb);
-  console.log(
-    "📄  Copied compile_commands.json to repository root.",
-  );
+  console.log("📄  Copied compile_commands.json to repository root.");
 } catch (symlinkErr) {
   try {
     // Fallback: copy the file into repo root
