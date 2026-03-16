@@ -61,6 +61,18 @@ if (fs.existsSync(path.join(JUCE_DIR, "modules"))) {
 }
 
 // --- Generate compile_commands.json via CMake (idempotent) ---
+
+// On Windows, CMake without an activated MSVC environment defaults to NMake
+// which is almost never installed standalone. Skip gracefully unless we're
+// already inside a Developer/vcvarsall shell (VCINSTALLDIR is set in that case).
+if (process.platform === "win32" && !process.env["VCINSTALLDIR"]) {
+  console.warn("⚠️  Skipping compile_commands.json generation on Windows.");
+  console.warn(
+    "    Run from a 'Developer PowerShell for VS 2022' prompt to enable this.",
+  );
+  process.exit(0);
+}
+
 console.log("🔧  Generating compile_commands.json with CMake...");
 
 const cmakeArgs = [
