@@ -41,7 +41,7 @@ STAGE_TOOLS="$STAGE/tools"
 STAGE_RESOURCES="$STAGE/resources"
 STAGE_PKGS="$STAGE/pkgs"
 
-VERSION="1.24"
+VERSION="$(node -e "process.stdout.write(require('$ROOT/package.json').version)")"
 PKG_ID_PREFIX="com.shiru.flopster"
 
 # ── Colours ───────────────────────────────────────────────────────────────────

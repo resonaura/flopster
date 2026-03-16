@@ -34,7 +34,7 @@ BIN_SRC="$ARTEFACTS/Standalone/flopster"
 APPDIR="$ROOT/.appimage_stage/AppDir"
 TOOLS_DIR="$ROOT/.appimage_stage/tools"
 
-VERSION="1.24"
+VERSION="$(node -e "process.stdout.write(require('$ROOT/package.json').version)")"
 
 # ── Architecture detection ────────────────────────────────────────────────────
 UNAME_M="$(uname -m)"

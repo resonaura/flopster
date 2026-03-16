@@ -41,7 +41,7 @@ BIN_SRC="$ARTEFACTS/Standalone/flopster"
 
 STAGE="$ROOT/.deb_stage"
 
-VERSION="1.24"
+VERSION="$(node -e "process.stdout.write(require('$ROOT/package.json').version)")"
 
 # ── Architecture detection ────────────────────────────────────────────────────
 case "$(uname -m)" in

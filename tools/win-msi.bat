@@ -39,8 +39,8 @@ chcp 65001 >nul 2>&1
 :: ── Identity & version ────────────────────────────────────────────────────────
 set "PRODUCT_NAME=Flopster"
 set "MANUFACTURER=Shiru and Resonaura"
-set "VERSION=1.24.0.0"
-set "VERSION_SHORT=1.24"
+for /f "delims=" %%V in ('powershell -NoProfile -Command "(Get-Content '%~dp0..\package.json' | ConvertFrom-Json).version"') do set "VERSION_SHORT=%%V"
+set "VERSION=%VERSION_SHORT%.0.0"
 set "UPGRADE_CODE={A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 
 :: ── Paths ─────────────────────────────────────────────────────────────────────
