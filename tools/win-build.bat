@@ -219,20 +219,55 @@ exit /b 1
 :generator_done
 
 :: ── For Ninja: locate vcvarsall.bat and set the cross-compile environment ─────
+::
+::  Strategy:
+::   1. Use vswhere to find the real install path (handles any edition/arch).
+::   2. Fall back to a hardcoded list covering all known editions on both
+::      x64 and ARM64 hosts (VS installs to Program Files on ARM64, not x86).
+::
 set "VCVARS="
 if "!USE_NINJA!"=="1" (
-    :: Look in all known VS install paths
+
+    :: -- 1. Try vswhere (most reliable) ----------------------------------------
+    if exist "!VSWHERE!" (
+        set "_VS_PATH="
+        for /f "usebackq tokens=*" %%P in (
+            `"!VSWHERE!" -latest -requires Microsoft.VisualCpp.Tools.HostX64.TargetARM64 -property installationPath 2^>nul`
+        ) do set "_VS_PATH=%%P"
+
+        :: Broader query if the specific component wasn't found
+        if not defined _VS_PATH (
+            for /f "usebackq tokens=*" %%P in (
+                `"!VSWHERE!" -latest -requires Microsoft.Component.MSBuild -property installationPath 2^>nul`
+            ) do set "_VS_PATH=%%P"
+        )
+
+        if defined _VS_PATH (
+            if exist "!_VS_PATH!\VC\Auxiliary\Build\vcvarsall.bat" (
+                set "VCVARS=!_VS_PATH!\VC\Auxiliary\Build\vcvarsall.bat"
+                goto vcvars_found
+            )
+        )
+    )
+
+    :: -- 2. Hardcoded fallback list (VS 2022 + 2019, all editions, x64 + ARM64 hosts)
     for %%D in (
-        "!VS_INSTALL_PATH!"
-        "!VS2019_PATH!"
         "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise"
         "%ProgramFiles%\Microsoft Visual Studio\2022\Professional"
         "%ProgramFiles%\Microsoft Visual Studio\2022\Community"
         "%ProgramFiles%\Microsoft Visual Studio\2022\BuildTools"
-        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build"
-        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Professional\VC\Auxiliary\Build"
-        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build"
-        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\BuildTools\VC\Auxiliary\Build"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Enterprise"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Professional"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\Community"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2022\BuildTools"
+        "%ProgramFiles%\Microsoft Visual Studio\2019\Enterprise"
+        "%ProgramFiles%\Microsoft Visual Studio\2019\Professional"
+        "%ProgramFiles%\Microsoft Visual Studio\2019\Community"
+        "%ProgramFiles%\Microsoft Visual Studio\2019\BuildTools"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Enterprise"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Professional"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Community"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\BuildTools"
     ) do (
         if exist "%%~D\VC\Auxiliary\Build\vcvarsall.bat" (
             set "VCVARS=%%~D\VC\Auxiliary\Build\vcvarsall.bat"
@@ -242,7 +277,9 @@ if "!USE_NINJA!"=="1" (
 
     echo  [WARN] vcvarsall.bat not found — Ninja will use PATH as-is.
     echo         Cross-compilation may not work correctly.
-    echo         Install Visual Studio Build Tools for proper cross-compile support.
+    echo         Install Visual Studio 2022 Build Tools:
+    echo           https://aka.ms/vs/17/release/vs_buildtools.exe
+    echo         Select workload: "Desktop development with C++"
     goto vcvars_skip
 )
 goto vcvars_skip
