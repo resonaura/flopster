@@ -65,6 +65,10 @@ juce_add_plugin(Flopster
     # Bundle / app identifiers
     BUNDLE_ID                   com.shiru.flopster
     PLUGIN_AU_EXPORT_PREFIX     FlopsterAU
+
+    # Suppress the resourceUsage block in AU Info.plist — it causes Logic Pro
+    # to silently reject the plugin when the AU is not sandboxed/signed for MAS
+    SUPPRESS_AU_PLIST_RESOURCE_USAGE TRUE
 )
 
 juce_generate_juce_header(Flopster)
@@ -88,7 +92,7 @@ target_compile_definitions(Flopster
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
-        JUCE_MODAL_LOOPS_PERMITTED=1
+
         JUCE_USE_OPENGL=1
 )
 

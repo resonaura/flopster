@@ -29,6 +29,7 @@
 
 #define MAX_TAILS               16
 #define MAX_VOICES              3
+#define SLIDE_VOICES            1   // slide mode is mono — always voice 0
 
 //==============================================================================
 enum SampleType
@@ -93,6 +94,8 @@ struct FDDState
     float       head_level              = 0.0f;
     float       head_fade_level         = 0.0f;
     double      sample_step             = 1.0;
+    bool        slide_pitch_active      = false; // true while pitch is still gliding
+    bool        slide_gain_active       = false; // true while crossfade gain is still moving
     bool        head_buzz               = false;
 
     int head_pos      = 0;   // 0..159
@@ -102,13 +105,29 @@ struct FDDState
 
     float low_freq_acc = 0.0f;
     float low_freq_add = 0.0f;
+    float low_freq_add_target = 0.0f;  // target pitch for slide interpolation
+
+    // Crossfade gain for slide mode: voice 0 = old note (1→0), voice 1 = new note (0→1)
+    float slide_gain        = 1.0f;   // current rendered gain (0..1)
+    float slide_gain_target = 1.0f;   // target gain we're fading toward
 
     int sample_type = SAMPLE_TYPE_NONE;
+
+    // Audio thread writes this whenever a new sample type starts playing.
+    // GUI thread reads-and-clears it in timerCallback() to set ledHoldType.
+    // Using atomic so the write from the audio thread is always visible to GUI.
+    std::atomic<int> ledTrigger { SAMPLE_TYPE_NONE };
 
     // GUI hold: keeps the LED lit for a few timer ticks after a short sample
     // finishes, so STEP / NOISE / BUZZ don't vanish before the next repaint.
     int  ledHoldType   = SAMPLE_TYPE_NONE; // last non-NONE type seen
     int  ledHoldFrames = 0;                // ticks remaining to keep LED lit
+
+    // True while the spindle sample is actually producing audio (ptr < end).
+    // Updated every sample in renderOneSample() — used by the GUI LED instead
+    // of spindle_enable so the indicator tracks the real sound, not just the
+    // logical on/off flag.
+    std::atomic<bool> spindle_audible { false };
 
     // Per-voice tail ring (for fadeouts on note changes)
     TailData tail_ring[MAX_TAILS] {};
@@ -220,6 +239,23 @@ public:
     // is sufficient.
     int kbOctaveOffset { 0 };
 
+    // When true, on note-off the head seeks back toward position 0 instead
+    // of simply stopping.  Written by the editor (message thread), read on
+    // the audio thread — std::atomic for safe cross-thread access.
+    std::atomic<bool> returnMode { false };
+
+    // Slide (portamento) mode: glide between notes using pitch interpolation.
+    // When on, numVoices is forced to SLIDE_VOICES and btnVoices is locked.
+    std::atomic<bool> slideMode { false };
+
+    // Slide speed: seconds to travel one semitone (0.01 = fast, 0.5 = slow).
+    // Written by editor (message thread), read on audio thread — atomic float.
+    std::atomic<float> slideSpeed { 0.05f };
+
+    // Last note played (used by slide mode to compute start pitch).
+    // Written on audio thread only.
+    int slideLastNote { -1 };
+
     // Load all samples for the current program.
     // MUST be called on the message thread only (does file I/O under samplesLock).
     void loadAllSamples();
@@ -233,16 +269,30 @@ private:
 
 
     //==========================================================================
-    // Parameters (cached floats, written from parameterChanged on message thread
-    // and read from audio thread – we use atomic to be safe)
-    std::atomic<float> pHeadStepGain { 1.0f  };
-    std::atomic<float> pHeadSeekGain { 1.0f  };
-    std::atomic<float> pHeadBuzzGain { 1.0f  };
-    std::atomic<float> pSpindleGain  { 0.25f };
-    std::atomic<float> pNoisesGain   { 0.5f  };
-    std::atomic<float> pDetune       { 0.5f  };
-    std::atomic<float> pOctaveShift  { 0.5f  };
-    std::atomic<float> pOutputGain   { 1.0f  };
+    // Raw parameter value pointers – set once in the constructor (message thread),
+    // then read lock-free from the audio thread.  JUCE guarantees the pointed-to
+    // std::atomic<float> is updated whenever the parameter changes, so no extra
+    // listener or atomic copy is needed.
+    const std::atomic<float>* rawHeadStepGain = nullptr;
+    const std::atomic<float>* rawHeadSeekGain = nullptr;
+    const std::atomic<float>* rawHeadBuzzGain = nullptr;
+    const std::atomic<float>* rawSpindleGain  = nullptr;
+    const std::atomic<float>* rawNoisesGain   = nullptr;
+    const std::atomic<float>* rawDetune       = nullptr;
+    const std::atomic<float>* rawSlideSpeed   = nullptr;
+    const std::atomic<float>* rawOctaveShift  = nullptr;
+    const std::atomic<float>* rawOutputGain   = nullptr;
+
+    // Convenience inline helpers so call-sites read naturally.
+    float pHeadStepGain() const noexcept { return rawHeadStepGain ? rawHeadStepGain->load() : 1.0f; }
+    float pHeadSeekGain() const noexcept { return rawHeadSeekGain ? rawHeadSeekGain->load() : 1.0f; }
+    float pHeadBuzzGain() const noexcept { return rawHeadBuzzGain ? rawHeadBuzzGain->load() : 1.0f; }
+    float pSpindleGain()  const noexcept { return rawSpindleGain  ? rawSpindleGain->load()  : 0.25f; }
+    float pNoisesGain()   const noexcept { return rawNoisesGain   ? rawNoisesGain->load()   : 0.5f; }
+    float pDetune()       const noexcept { return rawDetune       ? rawDetune->load()       : 0.5f; }
+    float pOctaveShift()  const noexcept { return rawOctaveShift  ? rawOctaveShift->load()  : 0.5f; }
+    float pSlideSpeed()   const noexcept { return rawSlideSpeed   ? rawSlideSpeed->load()   : 0.1f; }
+    float pOutputGain()   const noexcept { return rawOutputGain   ? rawOutputGain->load()   : 1.0f; }
 
     //==========================================================================
     // Sample banks
@@ -298,6 +348,7 @@ private:
 
     //==========================================================================
     // Floppy helpers (all operate on a specific FDD voice)
+    double noteToLowFreqAdd (int note) const;
     void  tailAdd           (FDDState& fdd, SampleData* sample, double ptr, double step, float level);
     void  floppyStartHead   (FDDState& fdd, SampleData* sample, float gain, int type, bool loop, bool buzz, double relative);
     void  floppyStep        (FDDState& fdd, int pos);

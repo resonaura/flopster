@@ -27,6 +27,7 @@ public:
                                        accentG = c.getFloatGreen();
                                        accentB = c.getFloatBlue(); }
     void setFrame  (uint32_t f)      { frame = f; }
+    void setDynamic (float v, bool enabled) { caDynamic = v; dynEnabled = enabled; }
 
     void applyEffect (juce::Image& src, juce::Graphics& destG,
                       float scaleFactor, float alpha) override
@@ -63,7 +64,8 @@ public:
 
                     // CA strength: zero at centre, grows toward edges only.
                     // dist ranges 0..~0.71; squaring makes it fall off fast near centre.
-                    const float caStr = dist * dist * 0.003f * scaleFactor;
+                    const float dynCA = dynEnabled ? caDynamic * 0.004f : 0.0f;
+                    const float caStr = dist * dist * (0.002f + dynCA) * scaleFactor;
 
                     // Shift is horizontal-only — avoids lens-bulge look.
                     const float rxf  = (float)x + (-dx) * caStr * (float)W;
@@ -100,7 +102,7 @@ public:
                     const int grainR = (int)(h  & 0xFF) - 128;
                     const int grainB = (int)(h2 & 0xFF) - 128;
                     const int grainG = (grainR + grainB) >> 1;
-                    const int noiseScale = 4; // ±2 out of 255  (barely-there grain)
+                    const int noiseScale = dynEnabled ? (4 + (int)(caDynamic * 28.f)) : 4;
 
                     R = juce::jlimit (0, 255, R + grainR * noiseScale / 256);
                     G = juce::jlimit (0, 255, G + grainG * noiseScale / 256);
@@ -128,8 +130,10 @@ public:
     }
 
 private:
-    float    accentR { 0.14f }, accentG { 0.18f }, accentB { 0.82f };
-    uint32_t frame   { 0 };
+    float    accentR    { 0.14f }, accentG { 0.18f }, accentB { 0.82f };
+    uint32_t frame      { 0 };
+    float    caDynamic  { 0.0f };
+    bool     dynEnabled { true };
 };
 
 //==============================================================================
@@ -168,7 +172,9 @@ public:
         g.drawRect (bounds, 1.0f);
 
         g.setColour (colText);
-        g.setFont (juce::Font (juce::FontOptions (10.0f)));
+        // Scale font proportionally to the slider's rendered height so it
+        // looks correct at any uiScale (bounds are already in physical pixels).
+        g.setFont (juce::Font (juce::FontOptions (juce::jmax (8.0f, height * 0.55f))));
         g.drawText (slider.getTextFromValue (slider.getValue()),
                     bounds.toNearestInt(), juce::Justification::centred, false);
     }
@@ -181,8 +187,7 @@ class FlopsterSlider : public juce::Slider
 {
 public:
     FlopsterSlider (const juce::String& paramID,
-                    juce::AudioProcessorValueTreeState& apvts,
-                    juce::Image)
+                    juce::AudioProcessorValueTreeState& apvts)
         : juce::Slider (juce::Slider::LinearHorizontal, juce::Slider::NoTextBox)
     {
         setLookAndFeel (&laf);
@@ -204,7 +209,6 @@ public:
     }
 
     void refreshValue()       { repaint(); }
-    void setCharSheet (juce::Image) {}
 
 private:
     FlopsterSliderLAF laf;
@@ -225,6 +229,8 @@ public:
 
     void paint   (juce::Graphics& g) override;
     void resized () override;
+
+    void setScale (float s) { kbScale = s; }
 
     void mouseDown  (const juce::MouseEvent& e) override;
     void mouseDrag  (const juce::MouseEvent& e) override;
@@ -264,6 +270,8 @@ private:
     float blackKeyW  = 0.f, blackKeyH  = 0.f;
     int   numWhiteKeys = 0;
     int   whiteIndex[NUM_NOTES] {};
+
+    float kbScale = 1.0f;
 
     struct KeyLabel { int midiNote; char label[8]; };
     std::vector<KeyLabel> keyLabels;
@@ -350,10 +358,8 @@ class FlopsterAudioProcessorEditor : public juce::AudioProcessorEditor,
                                       public juce::Button::Listener
 {
 public:
-    void loadImagesFromPreset (const juce::String& presetName);
+    void applyPreset (const juce::String& presetName);
 
-    juce::Image     getBackgroundImage() const;
-    juce::Image     getCharImage()       const;
     juce::ComboBox* getPresetBox()       const;
     PixelKeyboard*  getPixelKeyboard()   const;
 
@@ -398,13 +404,11 @@ private:
     uint32_t m_frameCount { 0 };
 
     //==========================================================================
-    juce::Image bgImage;
-    juce::Image charImage;
-    int charW = 1, charH = 1;
-
-    static constexpr int GUI_SCALE = 3;
     static constexpr int MAIN_W    = 600;
     static constexpr int MAIN_H    = 260;
+
+    float uiScale { 1.0f };
+    void  applyScale (float newScale);
 
     //==========================================================================
     std::unique_ptr<FlopsterSlider> sliderHeadStep;
@@ -424,6 +428,16 @@ private:
 
     std::unique_ptr<juce::TextButton> btnVoices;
     std::unique_ptr<juce::TextButton> btnNormalize;
+    std::unique_ptr<juce::TextButton> btnReturn;
+    std::unique_ptr<juce::TextButton> btnSlide;
+    std::unique_ptr<FlopsterSlider>   sliderSlideSpeed;
+    std::unique_ptr<juce::ComboBox>   scaleBox;
+
+    // Dynamic CRT effect (CA + grain driven by audio level)
+    float  m_dynTarget  { 0.0f };  // target from audio meter (0..1)
+    float  m_dynSmooth  { 0.0f };  // smoothed value with easing
+    bool   m_dynEnabled { true };  // toggled by btnFx
+    std::unique_ptr<juce::TextButton> btnFx;
 
     void savePresetToFile();
     void loadPresetFromFile();
