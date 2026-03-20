@@ -201,20 +201,21 @@ if defined _VS_ANY_VER (
 
 :: For VS >= 18 (e.g. VS 2026): CMake may not know the generator name yet.
 :: Use VS-bundled Ninja instead — it ships at a known path inside every VS install.
-if defined _VS_ANY_PATH (
-    if defined _VS_MAJOR (
-        if !_VS_MAJOR! GEQ 18 (
-            set "_BUNDLED_NINJA=!_VS_ANY_PATH!\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
-            if exist "!_BUNDLED_NINJA!" (
-                set "PATH=!_VS_ANY_PATH!\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;!PATH!"
-                set "GENERATOR=Ninja"
-                set "USE_NINJA=1"
-                echo  [ok] Found Visual Studio !_VS_ANY_VER!
-                echo  [ok] Using VS-bundled Ninja
-                goto generator_done
-            )
-        )
+:: NOTE: goto inside deeply-nested if-blocks breaks cmd.exe; use a flag instead.
+set "_USE_BUNDLED_NINJA=0"
+if defined _VS_ANY_PATH if defined _VS_MAJOR (
+    if !_VS_MAJOR! GEQ 18 (
+        set "_BUNDLED_NINJA=!_VS_ANY_PATH!\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+        if exist "!_BUNDLED_NINJA!" set "_USE_BUNDLED_NINJA=1"
     )
+)
+if "!_USE_BUNDLED_NINJA!"=="1" (
+    set "PATH=!_VS_ANY_PATH!\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;!PATH!"
+    set "GENERATOR=Ninja"
+    set "USE_NINJA=1"
+    echo  [ok] Found Visual Studio !_VS_ANY_VER!
+    echo  [ok] Using VS-bundled Ninja
+    goto generator_done
 )
 
 :: Map major → CMake generator name for older VS versions
