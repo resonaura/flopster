@@ -73,6 +73,48 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::AudioParameterFloatAttributes().withValueFromStringFunction (gainT2V)
                                               .withStringFromValueFunction (gainV2T)));
 
+    // ── Bitcrusher parameters ─────────────────────────────────────────────────
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "bcDrive",      "BC Drive",
+        juce::NormalisableRange<float> (0.0f, 50.0f), 0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "bcResolution", "BC Resolution",
+        juce::NormalisableRange<float> (1.0f, 24.0f), 8.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "bcDownsample", "BC Downsample",
+        juce::NormalisableRange<float> (1.0f, 40.0f), 1.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "bcMix",        "BC Mix",
+        juce::NormalisableRange<float> (0.0f, 1.0f),  0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "bcClipLevel",  "BC Clip Level",
+        juce::NormalisableRange<float> (-24.0f, 0.0f), 0.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "bcMode", "BC Mode",
+        juce::StringArray { "Fold", "Clip", "Wrap" }, 1));
+
+    // ── Tail Crush parameters (delay + bitcrusher on tail) ────────────────────
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "tcDelayTime",  "TC Delay Time",
+        juce::NormalisableRange<float> (10.0f, 500.0f), 150.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "tcFeedback",   "TC Feedback",
+        juce::NormalisableRange<float> (0.0f, 0.95f),  0.4f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "tcCrushAmt",   "TC Crush",
+        juce::NormalisableRange<float> (1.0f, 16.0f),  4.0f));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "tcMix",        "TC Mix",
+        juce::NormalisableRange<float> (0.0f, 1.0f),   0.0f));
+
     return { params.begin(), params.end() };
 }
 
@@ -123,7 +165,7 @@ void FlopsterAudioProcessor::parameterChanged (const juce::String&, float)
 }
 
 //==============================================================================
-void FlopsterAudioProcessor::prepareToPlay (double /*sampleRate*/, int /*samplesPerBlock*/)
+void FlopsterAudioProcessor::prepareToPlay (double /*sampleRate*/, int samplesPerBlock)
 {
     updatePitch();
     // Do NOT call loadAllSamples() here — it touches the file system and can
@@ -137,6 +179,20 @@ void FlopsterAudioProcessor::prepareToPlay (double /*sampleRate*/, int /*samples
     memset (midiKeyState, 0, sizeof (midiKeyState));
     midiPitchBend      = 0.0f;
     midiPitchBendRange = 2.0f;
+
+    // ── Metronome DSP state reset ─────────────────────────────────────────────
+    metro_phase_samples = 0.0;
+    metro_click_amp     = 0.0f;
+    m_metroBuf.assign ((size_t) juce::jmax (512, samplesPerBlock), 0.0f);
+
+    // ── Effects DSP state reset ───────────────────────────────────────────────
+    tc_delayBufL.assign (TC_DELAY_MAX_SAMPLES, 0.0f);
+    tc_delayBufR.assign (TC_DELAY_MAX_SAMPLES, 0.0f);
+    tc_writePos          = 0;
+    bc_downsampleCounter = 0.0f;
+    tc_downsampleCounter = 0.0f;
+    bc_heldSampleL = bc_heldSampleR = 0.0f;
+    tc_heldSampleL = tc_heldSampleR = 0.0f;
 }
 
 void FlopsterAudioProcessor::releaseResources() {}
@@ -1145,11 +1201,192 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                     floppyStep (fdd, -1);
                 }
 
-                mixed += renderOneSample (fdd);
+                float voiceSample = renderOneSample (fdd);
+                mixed += voiceSample;
+
+                // Per-voice VU level: raise-only peak hold.
+                // GUI timer applies decay so we never block here.
+                float absLevel = std::abs (voiceSample);
+                if (absLevel > fdd.vuLevel.load (std::memory_order_relaxed))
+                    fdd.vuLevel.store (absLevel, std::memory_order_relaxed);
+            }
+
+            // ── Metronome click ──────────────────────────────────────────────
+            float metroClick = 0.0f;
+            if (metronomeEnabled.load (std::memory_order_relaxed))
+            {
+                float bpm = metronomeBpm.load (std::memory_order_relaxed);
+                if (bpm > 0.0f)
+                {
+                    double beatLen = getSampleRate() * 60.0 / (double)bpm;
+                    metro_phase_samples += 1.0;
+                    if (metro_phase_samples >= beatLen)
+                    {
+                        metro_phase_samples -= beatLen;
+                        metro_click_amp = 1.0f;
+                        int next = (metronomeBeat.load (std::memory_order_relaxed) + 1) % 4;
+                        metronomeBeat.store (next, std::memory_order_relaxed);
+                    }
+                }
+                if (metro_click_amp > 0.001f)
+                {
+                    metroClick = metro_click_amp * 0.25f;
+                    metro_click_amp *= 0.990f;  // ~15 ms decay at 48 kHz
+                }
             }
 
             outL[s] = mixed;
             if (outR) outR[s] = mixed;
+            // Store metro click — will be added post-effects so it bypasses FX.
+            if (s < (int)m_metroBuf.size()) m_metroBuf[(size_t)s] = metroClick;
+        }
+
+        // ── Pre-effects level meter ────────────────────────────────────────────
+        {
+            float pkL = 0.f, pkR = 0.f;
+            for (int s = 0; s < numSamples; ++s)
+            {
+                float v = std::abs (outL[s]);
+                if (v > pkL) pkL = v;
+            }
+            if (outR)
+            {
+                for (int s = 0; s < numSamples; ++s)
+                {
+                    float v = std::abs (outR[s]);
+                    if (v > pkR) pkR = v;
+                }
+            }
+            else pkR = pkL;
+            if (pkL > meterL.load()) meterL.store (pkL);
+            if (pkR > meterR.load()) meterR.store (pkR);
+        }
+
+        // ── Effects chain ─────────────────────────────────────────────────────
+        {
+            auto* L = buffer.getWritePointer (0);
+            auto* R = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : L;
+            const int N = buffer.getNumSamples();
+
+            // Read parameters
+            float bcDrive  = *apvts.getRawParameterValue ("bcDrive");
+            float bcRes    = *apvts.getRawParameterValue ("bcResolution");
+            float bcDS     = *apvts.getRawParameterValue ("bcDownsample");
+            float bcMix    = *apvts.getRawParameterValue ("bcMix");
+            float bcClip   = *apvts.getRawParameterValue ("bcClipLevel");
+            int   bcMode   = (int)*apvts.getRawParameterValue ("bcMode");
+
+            float tcDelay  = *apvts.getRawParameterValue ("tcDelayTime");
+            float tcFB     = *apvts.getRawParameterValue ("tcFeedback");
+            float tcCrush  = *apvts.getRawParameterValue ("tcCrushAmt");
+            float tcMix    = *apvts.getRawParameterValue ("tcMix");
+
+            float clipLin   = juce::Decibels::decibelsToGain (bcClip);
+            float driveGain = juce::Decibels::decibelsToGain (bcDrive);
+            int   delaySamples = juce::jlimit (1, TC_DELAY_MAX_SAMPLES - 1,
+                                               (int)(tcDelay * getSampleRate() / 1000.0));
+
+            // Helper: quantise one sample to a given bit depth, then apply
+            // the selected saturation mode and clip ceiling.
+            auto bitcrush = [](float x, float bits, int mode, float clip) -> float
+            {
+                float q = std::pow (2.0f, juce::jlimit (1.0f, 24.0f, bits) - 1.0f);
+                float crushed = std::round (x * q) / q;
+                if (mode == 0) // Fold
+                {
+                    if (clip < 0.0001f) return crushed;
+                    float folded = crushed / clip;
+                    float fmod2  = std::fmod (folded + 1.0f, 2.0f);
+                    if (fmod2 < 0.0f) fmod2 += 2.0f;
+                    folded = (fmod2 <= 1.0f) ? fmod2 : 2.0f - fmod2;
+                    return (folded * 2.0f - 1.0f) * clip;
+                }
+                else if (mode == 1) // Clip
+                {
+                    return juce::jlimit (-clip, clip, crushed);
+                }
+                else // Wrap
+                {
+                    if (clip < 0.0001f) return crushed;
+                    float wrapped = std::fmod (crushed + clip, 2.0f * clip);
+                    if (wrapped < 0.0f) wrapped += 2.0f * clip;
+                    return wrapped - clip;
+                }
+            };
+
+            for (int i = 0; i < N; ++i)
+            {
+                float inL = L[i], inR = R[i];
+
+                // ── Tail Crush ─────────────────────────────────────────────
+                float tcOutL = 0.0f, tcOutR = 0.0f;
+                if (tcMix > 0.001f && tcEnabled.load (std::memory_order_relaxed))
+                {
+                    int readPos = (tc_writePos - delaySamples + TC_DELAY_MAX_SAMPLES)
+                                  % TC_DELAY_MAX_SAMPLES;
+                    float delL = tc_delayBufL[(size_t)readPos];
+                    float delR = tc_delayBufR[(size_t)readPos];
+
+                    tc_downsampleCounter += 1.0f;
+                    if (tc_downsampleCounter >= tcCrush)
+                    {
+                        tc_downsampleCounter -= tcCrush;
+                        float bits = 16.0f / juce::jmax (1.0f, tcCrush * 0.5f);
+                        tc_heldSampleL = bitcrush (delL, bits, 1, 1.0f);
+                        tc_heldSampleR = bitcrush (delR, bits, 1, 1.0f);
+                    }
+                    tcOutL = tc_heldSampleL;
+                    tcOutR = tc_heldSampleR;
+
+                    tc_delayBufL[(size_t)tc_writePos] = inL + tcOutL * tcFB;
+                    tc_delayBufR[(size_t)tc_writePos] = inR + tcOutR * tcFB;
+                    tc_writePos = (tc_writePos + 1) % TC_DELAY_MAX_SAMPLES;
+                }
+
+                // ── Bitcrusher ─────────────────────────────────────────────
+                float bcOutL = inL, bcOutR = inR;
+                if (bcMix > 0.001f && bcEnabled.load (std::memory_order_relaxed))
+                {
+                    float dL = inL * driveGain, dR = inR * driveGain;
+                    bc_downsampleCounter += 1.0f;
+                    if (bc_downsampleCounter >= bcDS)
+                    {
+                        bc_downsampleCounter -= bcDS;
+                        bc_heldSampleL = bitcrush (dL, bcRes, bcMode, clipLin);
+                        bc_heldSampleR = bitcrush (dR, bcRes, bcMode, clipLin);
+                    }
+                    bcOutL = juce::jlimit (-1.0f, 1.0f, bc_heldSampleL);
+                    bcOutR = juce::jlimit (-1.0f, 1.0f, bc_heldSampleR);
+                }
+
+                // Mix dry + wet for both effects and write back
+                L[i] = inL + (tcOutL - inL) * tcMix + (bcOutL - inL) * bcMix;
+                R[i] = inR + (tcOutR - inR) * tcMix + (bcOutR - inR) * bcMix;
+            }
+        }
+
+        // ── Add metronome click post-effects (bypasses FX chain) ─────────────
+        {
+            auto* pL = buffer.getWritePointer (0);
+            auto* pR = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr;
+            const int sN = buffer.getNumSamples();
+            for (int s = 0; s < sN && s < (int)m_metroBuf.size(); ++s)
+            {
+                float mc = m_metroBuf[(size_t)s];
+                pL[s] += mc;
+                if (pR) pR[s] += mc;
+            }
+        }
+
+        // ── Scope capture (post-effects, mono mix) ────────────────────────────
+        {
+            const auto* sL = buffer.getReadPointer (0);
+            const auto* sR = buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : sL;
+            const int   sN = buffer.getNumSamples();
+            int wp = scopeWritePos.load (std::memory_order_relaxed);
+            for (int i = 0; i < sN; ++i)
+                scopeBuffer[(wp + i) % SCOPE_SIZE] = (sL[i] + sR[i]) * 0.5f;
+            scopeWritePos.store ((wp + sN) % SCOPE_SIZE, std::memory_order_relaxed);
         }
 
         // Update head_pos_prev for GUI (track display voice)
@@ -1163,33 +1400,6 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
 
     } // samplesGuard releases samplesLock here
-
-    // Update VU meters unconditionally (raise-only; editor timer applies decay).
-    // Runs even when samplesLock.tryEnter() failed (buffer is silence in that case).
-    {
-        const float* rdL = buffer.getReadPointer (0);
-        const float* rdR = buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : nullptr;
-        const int numSamples = buffer.getNumSamples();
-
-        float pkL = 0.f, pkR = 0.f;
-        for (int s = 0; s < numSamples; ++s)
-        {
-            float v = std::abs (rdL[s]);
-            if (v > pkL) pkL = v;
-        }
-        if (rdR)
-        {
-            for (int s = 0; s < numSamples; ++s)
-            {
-                float v = std::abs (rdR[s]);
-                if (v > pkR) pkR = v;
-            }
-        }
-        else pkR = pkL;
-
-        if (pkL > meterL.load()) meterL.store (pkL);
-        if (pkR > meterR.load()) meterR.store (pkR);
-    }
     }
     catch (...)
     {

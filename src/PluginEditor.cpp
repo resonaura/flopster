@@ -90,6 +90,7 @@ PixelKeyboard::PixelKeyboard (NoteCallback cb)
 {
     std::memset (activeNotes, 0, sizeof (activeNotes));
     buildKeyLabels();
+    setMouseClickGrabsKeyboardFocus (false); // Don't steal keyboard focus from the editor
 }
 
 PixelKeyboard::~PixelKeyboard() {}
@@ -105,22 +106,29 @@ void PixelKeyboard::buildKeyLabels()
 {
     keyLabels.clear();
 
-    // ── Plugin mode: note names (C3, D4 …) on every white key ────────────────
+    // ── Plugin mode: note names (C3, D4 …) on white keys; short names on black keys ──
     if (noteNamesMode)
     {
-        // pc → letter for white keys; black keys are skipped (names too wide).
-        static const char* const noteLetters[12] = {
-            "C", nullptr, "D", nullptr, "E",
-            "F", nullptr, "G", nullptr, "A", nullptr, "B"
+        // Natural note letters for all 12 pitch classes
+        static const char* const noteNames[12] = {
+            "C",  "C#", "D",  "D#", "E",
+            "F",  "F#", "G",  "G#", "A",  "A#", "B"
         };
-        for (int note = MIDI_START; note <= MIDI_END; ++note)
+        for (int note = midiStart; note <= midiEnd; ++note)
         {
-            if (isBlackKey (note)) continue;
             int pc  = note % 12;
             int oct = note / 12 - 1;   // MIDI 60 = C4
             KeyLabel kl;
             kl.midiNote = note;
-            snprintf (kl.label, sizeof (kl.label), "%s%d", noteLetters[pc], oct);
+            if (isBlackKey (note))
+            {
+                // Black keys: show just the sharp name (e.g. "C#") — no octave number to save space
+                snprintf (kl.label, sizeof (kl.label), "%s", noteNames[pc]);
+            }
+            else
+            {
+                snprintf (kl.label, sizeof (kl.label), "%s%d", noteNames[pc], oct);
+            }
             keyLabels.push_back (kl);
         }
         return;
@@ -160,7 +168,7 @@ void PixelKeyboard::buildKeyLabels()
     for (auto& e : entries)
     {
         int shiftedNote = e.note + octaveOffset;
-        if (shiftedNote >= MIDI_START && shiftedNote <= MIDI_END && !seen[shiftedNote])
+        if (shiftedNote >= midiStart && shiftedNote <= midiEnd && !seen[shiftedNote])
         {
             seen[shiftedNote] = true;
             KeyLabel kl;
@@ -177,7 +185,7 @@ void PixelKeyboard::buildLayout()
     numWhiteKeys = 0;
     for (int i = 0; i < NUM_NOTES; ++i)
     {
-        int note = MIDI_START + i;
+        int note = midiStart + i;
         if (!isBlackKey (note))
             whiteIndex[i] = numWhiteKeys++;
         else
@@ -200,7 +208,7 @@ void PixelKeyboard::resized()
 
 juce::Rectangle<float> PixelKeyboard::noteRect (int note) const
 {
-    int idx = note - MIDI_START;
+    int idx = note - midiStart;
     if (idx < 0 || idx >= NUM_NOTES) return {};
 
     if (!isBlackKey (note))
@@ -216,7 +224,7 @@ juce::Rectangle<float> PixelKeyboard::noteRect (int note) const
         // white key with the same or lower note name.
         // We find the white key immediately to the left (the natural below).
         int naturalBelow = note - 1; // e.g. C#4 -> C4
-        int leftIdx      = naturalBelow - MIDI_START;
+        int leftIdx      = naturalBelow - midiStart;
         if (leftIdx < 0) return {};
         int wi = whiteIndex[leftIdx];
         if (wi < 0) return {}; // shouldn't happen
@@ -231,7 +239,7 @@ int PixelKeyboard::noteAtPoint (juce::Point<float> pt) const
     // Check black keys first (they sit on top)
     for (int i = 0; i < NUM_NOTES; ++i)
     {
-        int note = MIDI_START + i;
+        int note = midiStart + i;
         if (isBlackKey (note))
         {
             auto r = noteRect (note);
@@ -242,7 +250,7 @@ int PixelKeyboard::noteAtPoint (juce::Point<float> pt) const
     // Then white keys
     for (int i = 0; i < NUM_NOTES; ++i)
     {
-        int note = MIDI_START + i;
+        int note = midiStart + i;
         if (!isBlackKey (note))
         {
             auto r = noteRect (note);
@@ -263,9 +271,15 @@ void PixelKeyboard::paint (juce::Graphics& g)
     g.fillAll (thBg);
 
     // --- Draw white keys ---
+    int lastWhiteNote = -1;
+    for (int i = NUM_NOTES - 1; i >= 0; --i) {
+        int note = midiStart + i;
+        if (!isBlackKey(note)) { lastWhiteNote = note; break; }
+    }
+
     for (int i = 0; i < NUM_NOTES; ++i)
     {
-        int note = MIDI_START + i;
+        int note = midiStart + i;
         if (isBlackKey (note)) continue;
 
         auto r = noteRect (note);
@@ -276,13 +290,19 @@ void PixelKeyboard::paint (juce::Graphics& g)
         g.fillRect  (r);
 
         g.setColour (thAccent);
-        g.drawRect  (r, 1.0f);
+        // Draw LEFT, TOP, BOTTOM borders — but NOT the right border to avoid doubling with adjacent key
+        g.drawLine (r.getX(),     r.getY(),      r.getX(),     r.getBottom(), 1.0f); // left
+        g.drawLine (r.getX(),     r.getY(),      r.getRight(), r.getY(),      1.0f); // top
+        g.drawLine (r.getX(),     r.getBottom(), r.getRight(), r.getBottom(), 1.0f); // bottom
+        // Only draw the right border on the very last white key
+        if (note == lastWhiteNote)
+            g.drawLine (r.getRight(), r.getY(), r.getRight(), r.getBottom(), 1.0f); // right (last only)
     }
 
     // --- Draw black keys (on top) ---
     for (int i = 0; i < NUM_NOTES; ++i)
     {
-        int note = MIDI_START + i;
+        int note = midiStart + i;
         if (!isBlackKey (note)) continue;
 
         auto r = noteRect (note);
@@ -299,23 +319,25 @@ void PixelKeyboard::paint (juce::Graphics& g)
     // --- Draw key labels ---
     if (showLabels)
     {
-        juce::Font labelFont = m_labelFont.withHeight (7.5f * kbScale);
-        g.setFont (labelFont);
-
         for (auto& kl : keyLabels)
         {
             int note = kl.midiNote;
-            if (note < MIDI_START || note > MIDI_END) continue;
+            if (note < midiStart || note > midiEnd) continue;
 
             auto r = noteRect (note);
             if (r.isEmpty()) continue;
 
             bool black = isBlackKey (note);
+
+            // Use smaller font for black-key note labels to fit in narrow keys
+            float fontSz = (black && noteNamesMode) ? (6.0f * kbScale) : (7.5f * kbScale);
+            juce::Font labelFont = m_labelFont.withHeight (fontSz);
+            g.setFont (labelFont);
             g.setColour (black ? thLit : thAccent);
 
             // Position label near bottom of key
-            float labelH = 10.0f;
-            float labelY = black ? (r.getHeight() - labelH - 4.0f)
+            float labelH = (black && noteNamesMode) ? 8.0f : 10.0f;
+            float labelY = black ? (r.getHeight() - labelH - 2.0f)
                                  : (r.getHeight() - labelH - 2.0f);
             juce::Rectangle<float> labelRect (r.getX(), r.getY() + labelY,
                                               r.getWidth(), labelH);
@@ -379,8 +401,13 @@ void PixelKeyboard::setOctaveOffset (int semitones)
 {
     if (octaveOffset == semitones) return;
     octaveOffset = semitones;
+    // Shift the visible keyboard range so it always matches what the keyboard can play.
+    // At octaveOffset=-12: C3(48)..E5(76). At octaveOffset=0: C4(60)..E6(88). etc.
+    midiStart = MIDI_BASE_START + (octaveOffset + 12);
+    midiEnd   = MIDI_BASE_END   + (octaveOffset + 12);
+    buildLayout();
     buildKeyLabels();
-    if (showLabels) repaint();
+    repaint();
 }
 
 void PixelKeyboard::setShowKeyLabels (bool show)
@@ -439,7 +466,7 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     {
         juce::PropertiesFile prefs (flopsterPropsOpts());
         uiScale = juce::jlimit (0.5f, 3.0f,
-                                (float) prefs.getDoubleValue ("guiScale", 1.0));
+                                (float) prefs.getDoubleValue ("guiScale", 1.5));
     }
 
     // -------------------------------------------------------------------------
@@ -475,7 +502,7 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
 
     // -------------------------------------------------------------------------
     // Preset bar
-    presetLabel = std::make_unique<juce::Label> ("presetLabel", "PRESET:");
+    presetLabel = std::make_unique<juce::Label> ("presetLabel", "MODEL:");
     presetLabel->setColour (juce::Label::textColourId, juce::Colour (35, 46, 209));
     presetLabel->setFont (m_fontUI.withHeight (11.0f * uiScale));
     addAndMakeVisible (*presetLabel);
@@ -585,6 +612,7 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
 
     lblOctave->setColour (juce::Label::textColourId, juce::Colour (35, 46, 209));
     lblOctave->setJustificationType (juce::Justification::centred);
+    lblOctave->setFont (m_fontUI.withHeight (9.0f));
 
     // Octave controls are standalone-only — hide entirely in plugin mode
     btnOctaveDown->setVisible (isStandalone);
@@ -602,6 +630,80 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
 
     // Sync initial octave offset with the processor and piano
     processorRef.kbOctaveOffset = kbOctaveOffset;
+
+    // -------------------------------------------------------------------------
+    // BPM input (standalone only)
+    bpmInput = std::make_unique<juce::TextEditor>();
+    bpmInput->setText ("120", juce::dontSendNotification);
+    bpmInput->setInputRestrictions (5, "0123456789.");
+    bpmInput->setJustification (juce::Justification::centred);
+    bpmInput->onReturnKey = [this]
+    {
+        float newBpm = bpmInput->getText().getFloatValue();
+        newBpm = juce::jlimit (20.0f, 300.0f, newBpm);
+        lastBpmForSync = newBpm;
+        processorRef.metronomeBpm.store (newBpm);
+        if (fxTailCrush) fxTailCrush->setBpm (newBpm);
+        bpmInput->setText (juce::String ((int)newBpm), juce::dontSendNotification);
+    };
+    bpmInput->onFocusLost = bpmInput->onReturnKey;
+    addAndMakeVisible (*bpmInput);
+    bpmInput->setVisible (isStandalone);
+
+    // -------------------------------------------------------------------------
+    // Metronome (standalone only)
+    btnMetronome = std::make_unique<juce::TextButton> ("METRONOME");
+    btnMetronome->setClickingTogglesState (true);
+    btnMetronome->onClick = [this]
+    {
+        metronomePlaying = btnMetronome->getToggleState();
+        processorRef.metronomeEnabled.store (metronomePlaying);
+        processorRef.metronomeBpm.store (lastBpmForSync);
+        if (! metronomePlaying)
+        {
+            // Reset beat display when stopped
+            if (beatDisplay) beatDisplay->setBeat (-1);
+            lastBeatRead = -2;
+        }
+    };
+    addAndMakeVisible (*btnMetronome);
+    btnMetronome->setVisible (isStandalone);
+
+    // TAP tempo button
+    btnTap = std::make_unique<juce::TextButton> ("TAP");
+    btnTap->onClick = [this]
+    {
+        juce::int64 now = juce::Time::currentTimeMillis();
+        // Reset tap sequence if gap > 3 seconds
+        if (tapCount > 0 && (now - tapTimes[(tapCount - 1) % TAP_MAX]) > 3000)
+            tapCount = 0;
+
+        tapTimes[tapCount % TAP_MAX] = now;
+        ++tapCount;
+
+        if (tapCount >= 2)
+        {
+            // Average interval over last up to TAP_MAX taps
+            int n = juce::jmin (tapCount, TAP_MAX);
+            int oldest = (tapCount - n) % TAP_MAX;
+            int newest = (tapCount - 1) % TAP_MAX;
+            double totalMs = (double)(tapTimes[newest] - tapTimes[oldest]);
+            double avgIntervalMs = totalMs / (double)(n - 1);
+            float newBpm = (float)(60000.0 / avgIntervalMs);
+            newBpm = juce::jlimit (20.0f, 300.0f, newBpm);
+
+            lastBpmForSync = newBpm;
+            processorRef.metronomeBpm.store (newBpm);
+            if (fxTailCrush) fxTailCrush->setBpm (newBpm);
+        }
+    };
+    addAndMakeVisible (*btnTap);
+    btnTap->setVisible (isStandalone);
+
+    // Beat display
+    beatDisplay = std::make_unique<BeatDisplay>();
+    addAndMakeVisible (*beatDisplay);
+    beatDisplay->setVisible (isStandalone);
 
 
 
@@ -639,6 +741,17 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     };
     addAndMakeVisible (*btnFx);
 
+    // ── Effects Panels ─────────────────────────────────────────────────────────
+    fxBitcrusher = std::make_unique<EffectsPanel>();
+    fxBitcrusher->init (0, p.apvts, m_fontUI);
+    addAndMakeVisible (*fxBitcrusher);
+    fxBitcrusher->setEnabledAtomic (&processorRef.bcEnabled);
+
+    fxTailCrush = std::make_unique<EffectsPanel>();
+    fxTailCrush->init (1, p.apvts, m_fontUI);
+    addAndMakeVisible (*fxTailCrush);
+    fxTailCrush ->setEnabledAtomic (&processorRef.tcEnabled);
+
     // ── Return mode button ────────────────────────────────────────────────────
     btnReturn = std::make_unique<juce::TextButton> ("RET: ON");
     processorRef.returnMode.store (true);
@@ -650,18 +763,35 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     };
     addAndMakeVisible (*btnReturn);
 
+    // ── VU Meters — one per FDD voice + one for the main output ──────────────
+    for (int v = 0; v < MAX_VOICES; ++v)
+    {
+        vuMeters[v] = std::make_unique<VuMeter>();
+        vuMeters[v]->setTitle ("FDD" + juce::String (v + 1));
+        vuMeters[v]->setFont  (m_fontUI);
+        addAndMakeVisible (*vuMeters[v]);
+    }
+    vuMeterMain = std::make_unique<VuMeter>();
+    vuMeterMain->setTitle ("MAIN");
+    vuMeterMain->setFont  (m_fontUI);
+    addAndMakeVisible (*vuMeterMain);
+
+    // ── Waveform scope ────────────────────────────────────────────────────────
+    scopeDisplay = std::make_unique<ScopeDisplay>();
+    addAndMakeVisible (*scopeDisplay);
 
     // ── Scale combo box ───────────────────────────────────────────────────────
     scaleBox = std::make_unique<juce::ComboBox> ("scaleBox");
-    // Items: id == scale*100 for easy round-trip
-    for (int pct : { 75, 100, 125, 150, 175, 200 })
+    // Display pretty values: 50%, 75%, 100%, 125%, 150%, 200%
+    // But apply with 1.5x multiplier so 100% = 150% actual size
+    for (int pct : { 50, 75, 100, 125, 150, 200 })
         scaleBox->addItem (juce::String (pct) + "%", pct);
-    scaleBox->setSelectedId (juce::roundToInt (uiScale * 100.0f),
+    scaleBox->setSelectedId (juce::roundToInt (uiScale * 100.0f / 1.5f),
                              juce::dontSendNotification);
     scaleBox->onChange = [this]
     {
         int id = scaleBox->getSelectedId();
-        if (id > 0) applyScale (id / 100.0f);
+        if (id > 0) applyScale (id * 1.5f / 100.0f);  // Apply with 1.5x multiplier
     };
     addAndMakeVisible (*scaleBox);
 
@@ -685,7 +815,7 @@ FlopsterAudioProcessorEditor::FlopsterAudioProcessorEditor (FlopsterAudioProcess
     // Fixed base size (scaled by uiScale).
     static constexpr int PRESET_BAR_H = 28;
     static constexpr int KEYBOARD_H   = 96;
-    static constexpr int CREDITS_H    = 18;
+    static constexpr int CREDITS_H    = 30;
     static constexpr int BASE_H       = MAIN_H + PRESET_BAR_H + KEYBOARD_H + CREDITS_H;
 
     setSize (int (MAIN_W * uiScale), int (BASE_H * uiScale));
@@ -742,16 +872,21 @@ void FlopsterAudioProcessorEditor::applyScale (float newScale)
         prefs.saveIfNeeded();
     }
 
-    // Sync combo selection.
+    // Sync combo selection (divide by 1.5 to match display values).
     if (scaleBox)
-        scaleBox->setSelectedId (juce::roundToInt (uiScale * 100.0f),
+        scaleBox->setSelectedId (juce::roundToInt (uiScale * 100.0f / 1.5f),
                                  juce::dontSendNotification);
 
     // Update label fonts so they scale with the window.
     if (presetLabel) presetLabel->setFont (m_fontUI.withHeight (11.0f * uiScale));
+    if (lblOctave)   lblOctave->setFont   (m_fontUI.withHeight (9.0f));
 
     // Pass new scale to the keyboard so its key labels render at the right size.
     if (pixelKeyboard) pixelKeyboard->setScale (uiScale);
+
+    // Update effect panel button fonts to scale
+    if (fxBitcrusher) fxBitcrusher->setScale (uiScale);
+    if (fxTailCrush)  fxTailCrush->setScale (uiScale);
 
     // Update pixel-font keyboard labels and slider fonts
     if (pixelKeyboard) pixelKeyboard->setLabelFont (m_fontUI);
@@ -766,7 +901,7 @@ void FlopsterAudioProcessorEditor::applyScale (float newScale)
     sendLookAndFeelChange();
 
     // Resize — notifies the host (AU / VST3 / standalone) of the new window size.
-    static constexpr int BASE_H = MAIN_H + 28 + 96 + 18;   // PRESET_BAR_H + KEYBOARD_H + CREDITS_H
+    static constexpr int BASE_H = MAIN_H + 28 + 96 + 30;   // PRESET_BAR_H + KEYBOARD_H + CREDITS_H
     setSize (int (MAIN_W * uiScale), int (BASE_H * uiScale));
 }
 
@@ -1000,6 +1135,14 @@ bool FlopsterAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
 {
     if (! isStandalone) return false;
 
+    // Cmd+R — reset UI scale to default (100% = 1.5x)
+    if (key.getModifiers().isCommandDown()
+        && (key.getKeyCode() == 'r' || key.getKeyCode() == 'R'))
+    {
+        applyScale (1.5f);
+        return true;
+    }
+
     // keyPressed is called for every key-down event by JUCE (including
     // key-repeat). We use it as a supplement to pollKeyboard() to catch
     // keys where isCurrentlyDown() is unreliable on macOS (e.g. / ; [ ] - =).
@@ -1136,11 +1279,60 @@ void FlopsterAudioProcessorEditor::timerCallback()
         juce::String name = processorRef.programNames[prog];
         if (name != "empty")
             applyPreset (name);
+
+        // Refresh effects panels after state restoration
+        if (fxBitcrusher) fxBitcrusher->refreshDisplay();
+        if (fxTailCrush)  fxTailCrush->refreshDisplay();
+
+        // Refresh all main sliders and clip slider value displays
+        sliderHeadStep  ->refreshValue();
+        sliderHeadSeek  ->refreshValue();
+        sliderHeadBuzz  ->refreshValue();
+        sliderSpindle   ->refreshValue();
+        sliderNoises    ->refreshValue();
+        sliderDetune    ->refreshValue();
+        sliderOctave    ->refreshValue();
+        sliderOutput    ->refreshValue();
     }
 
     // Decay VU meters each tick (30 Hz → ~0.85^30 ≈ 0.01 in 1 s) and repaint
     processorRef.meterL.store (processorRef.meterL.load() * 0.82f);
     processorRef.meterR.store (processorRef.meterR.load() * 0.82f);
+
+    // ── Decay per-FDD VU levels on the GUI thread ─────────────────────────────
+    // The audio thread only raises vuLevel; we apply a gentle decay here so
+    // the peak-hold bar falls smoothly (~0.85^30 ≈ 1 second to near-zero).
+    for (int v = 0; v < MAX_VOICES; ++v)
+    {
+        float prev = processorRef.FDD[v].vuLevel.load (std::memory_order_relaxed);
+        processorRef.FDD[v].vuLevel.store (prev * 0.85f, std::memory_order_relaxed);
+    }
+
+    // ── Push decayed levels to VU meter components ────────────────────────────
+    for (int v = 0; v < MAX_VOICES; ++v)
+        if (vuMeters[v])
+            vuMeters[v]->setLevel (processorRef.FDD[v].vuLevel.load (std::memory_order_relaxed));
+
+    // ── Waveform scope ────────────────────────────────────────────────────────
+    if (scopeDisplay)
+    {
+        int wp = processorRef.scopeWritePos.load (std::memory_order_relaxed);
+        scopeDisplay->update (processorRef.scopeBuffer,
+                              FlopsterAudioProcessor::SCOPE_SIZE, wp);
+    }
+
+    {
+        float mainLevel = juce::jmax (processorRef.meterL.load(), processorRef.meterR.load());
+
+        if (vuMeterMain)
+            vuMeterMain->setLevel (mainLevel);
+
+        // Drive Tail Crush display with audio activity level
+        if (fxTailCrush)
+        {
+            fxTailCrush->setActivityLevel (mainLevel * 3.0f);  // x3 for visual boost (independent of mix)
+        }
+    }
 
     // ── Smooth dynamic CA/grain toward the current peak level ────────────────
     {
@@ -1175,6 +1367,22 @@ void FlopsterAudioProcessorEditor::timerCallback()
             if (fdd.ledHoldFrames == 0)
                 fdd.ledHoldType = SAMPLE_TYPE_NONE;
         }
+    }
+
+    // Metronome beat display
+    if (metronomePlaying && beatDisplay)
+    {
+        int curBeat = processorRef.metronomeBeat.load();
+        if (curBeat != lastBeatRead)
+        {
+            lastBeatRead = curBeat;
+            beatDisplay->setBeat (curBeat);
+        }
+    }
+    else if (beatDisplay && lastBeatRead != -2)
+    {
+        beatDisplay->setBeat (-1);
+        lastBeatRead = -2;
     }
 
     processorRef.guiNeedsUpdate.exchange (false);
@@ -1224,7 +1432,7 @@ void FlopsterAudioProcessorEditor::paint (juce::Graphics& g)
     const int rowH   = ROW_H;
     const int labW   = 88;
     const int sAreaX = 192;
-    const int col2X  = sAreaX + labW + slW + 22;
+    const int col2X  = sAreaX + labW + slW + 36;
     const int startY = 16;
 
     // LED / VU zone constants
@@ -1431,9 +1639,21 @@ void FlopsterAudioProcessorEditor::paint (juce::Graphics& g)
 
     // Column separator
     g.setColour (t.bgDark);
-    int sepX = col2X - 11;
+    int sepX = col2X - 18;
     g.drawLine ((float)sepX, (float)startY,
                 (float)sepX, (float)(startY + 4 * rowH), 1.0f);
+
+    // ── 6b. Effects section separator ────────────────────────────────────────
+    {
+        const int fxSepY = startY + 4 * rowH + 4;
+        g.setColour (t.accent.withAlpha (0.25f));
+        g.drawLine ((float)sAreaX, (float)fxSepY,
+                    (float)(MAIN_W - 38), (float)fxSepY, 0.5f);
+        g.setFont (uiFont (7.0f));
+        g.setColour (t.accent.withAlpha (0.55f));
+        g.drawText ("FX", sAreaX, fxSepY - 9, 22, 9,
+                    juce::Justification::centred, false);
+    }
 
     // ── 7. Preset bar background (one row) ───────────────────────────────────
     static constexpr int PRESET_BAR_H = 28;
@@ -1448,12 +1668,12 @@ void FlopsterAudioProcessorEditor::paint (juce::Graphics& g)
     static constexpr int KEYBOARD_H_C = 96;
     static constexpr int CREDITS_Y    = MAIN_H + PRESET_BAR_H + KEYBOARD_H_C;
     static constexpr int SCALE_W      = 68;   // must match resized()
-    static constexpr int CREDITS_H_P  = 18;
+    static constexpr int CREDITS_H_P  = 30;
     g.setColour (t.bg);
     g.fillRect  (0, CREDITS_Y, W, CREDITS_H_P);
     g.setColour (t.accent);
-    static constexpr int SCALE_BOX_H = 14;   // matches resized()
-    static constexpr int CR_PAD      = (CREDITS_H_P - SCALE_BOX_H) / 2;   // ≈ 2 px
+    static constexpr int SCALE_BOX_H = 22;   // matches resized()
+    static constexpr int CR_PAD      = 2;   // centres in visual space incl. KB_PAD_B gap above bar
     g.setFont   (logoFont (9.0f));
     g.drawText  ("BY SHIRU & RESONAURA WITH <3",
                  4, CREDITS_Y + CR_PAD, W - SCALE_W - 14, SCALE_BOX_H,
@@ -1500,6 +1720,25 @@ void FlopsterAudioProcessorEditor::applyTheme (int programIndex)
 
     styleBtn (btnOctaveDown.get());
     styleBtn (btnOctaveUp.get());
+    styleBtn (btnMetronome.get());
+    styleBtn (btnTap.get());
+
+    // Style beat display
+    if (beatDisplay)
+        beatDisplay->setTheme (t.bgDark, t.accent, t.lit);
+
+    // Style BPM input
+    if (bpmInput)
+    {
+        bpmInput->setColour (juce::TextEditor::backgroundColourId,      t.bgDark);
+        bpmInput->setColour (juce::TextEditor::textColourId,            t.lit);
+        bpmInput->setColour (juce::TextEditor::outlineColourId,         t.accent);
+        bpmInput->setColour (juce::TextEditor::focusedOutlineColourId,  t.lit);
+        bpmInput->setColour (juce::CaretComponent::caretColourId,        t.lit);
+        bpmInput->setColour (juce::TextEditor::highlightColourId,       t.accent.withAlpha (0.4f));
+        bpmInput->setColour (juce::TextEditor::highlightedTextColourId, t.lit);
+        bpmInput->setFont   (m_fontUI.withHeight (9.0f * uiScale));
+    }
 
     // ── Combo boxes ───────────────────────────────────────────────────────────
     auto styleCombo = [&](juce::ComboBox* cb)
@@ -1521,8 +1760,20 @@ void FlopsterAudioProcessorEditor::applyTheme (int programIndex)
     if (pixelKeyboard)
         pixelKeyboard->setThemeColors (t.bg, t.bgDark, t.accent, t.lit);
 
+    // ── VU Meters ─────────────────────────────────────────────────────────────
+    for (int v = 0; v < MAX_VOICES; ++v)
+        if (vuMeters[v]) vuMeters[v]->setTheme (t.bg, t.bgDark, t.accent, t.lit);
+    if (vuMeterMain) vuMeterMain->setTheme (t.bg, t.bgDark, t.accent, t.lit);
+    if (scopeDisplay) scopeDisplay->setTheme (t.bgDark, t.accent, t.lit);
+
     // Update the CRT effect accent colour so glow tints match the theme.
     m_crtEffect.setAccent (t.accent);
+
+    // ── Effects panels ────────────────────────────────────────────────────────
+    if (fxBitcrusher) fxBitcrusher->setTheme (t.bg, t.bgDark, t.accent, t.lit);
+    if (fxTailCrush)  fxTailCrush ->setTheme (t.bg, t.bgDark, t.accent, t.lit);
+    if (fxBitcrusher) fxBitcrusher->setScale (uiScale);
+    if (fxTailCrush)  fxTailCrush->setScale (uiScale);
 
     repaint();
 }
@@ -1542,7 +1793,7 @@ void FlopsterAudioProcessorEditor::resized()
     static constexpr int ROW_H_B = 28;
     static constexpr int LAB_W_B = 88;
     static constexpr int SAREA_X = 192;
-    static constexpr int COL2_X  = SAREA_X + LAB_W_B + SL_W_B + 22;
+    static constexpr int COL2_X  = SAREA_X + LAB_W_B + SL_W_B + 36;
     static constexpr int START_Y = 16;
 
     auto col = [&](int c, int r) -> juce::Rectangle<int> {
@@ -1558,6 +1809,55 @@ void FlopsterAudioProcessorEditor::resized()
     if (sliderDetune)   sliderDetune  ->setBounds (col (1, 1));
     if (sliderOctave)   sliderOctave  ->setBounds (col (1, 2));
     if (sliderOutput)   sliderOutput  ->setBounds (col (1, 3));
+
+    // ── Effects Panels (below the slider grid, right of LED/head indicator) ───
+    {
+        static constexpr int FX_Y    = START_Y + 4 * ROW_H_B + 8;    // 136
+        static constexpr int FX_H_PX = MAIN_H - FX_Y - 6;            // 118
+        static constexpr int FX_START = SAREA_X;
+        // Leave a gap before the VU-meter strip (VU starts at MAIN_W - 35)
+        static constexpr int FX_END  = MAIN_W - 38;
+        int fxW = (FX_END - FX_START - 4) / 2 - 2;
+
+        if (fxTailCrush)   fxTailCrush  ->setBounds (SR (FX_START,           FX_Y, fxW, FX_H_PX));
+        if (fxBitcrusher)  fxBitcrusher ->setBounds (SR (FX_START + fxW + 4, FX_Y, fxW, FX_H_PX));
+    }
+
+    // ── VU Meters (right edge of main panel) ──────────────────────────────────
+    // 7-px narrow strips running the full main height. Layout (base coords):
+    //   FDD1 @ 565, FDD2 @ 573, FDD3 @ 581  (1-px gaps between FDD meters)
+    //   3-px visual break, then MAIN @ 592   (all end at x=599, 1-px right margin)
+    {
+        static constexpr int VU_W     = 7;    // width of each narrow meter
+        static constexpr int VU_GAP   = 1;    // gap between adjacent FDD meters
+        static constexpr int VU_EXTRA = 3;    // extra gap before the MAIN meter
+        static constexpr int VU_Y     = 8;    // top of meter area (below title)
+        static constexpr int VU_H     = MAIN_H - VU_Y - 8;  // 244 px tall
+
+        // Total footprint: 3*(7+1) + 3 + 7 = 34 px; start at MAIN_W - 34 - 1 = 565
+        static constexpr int VU_TOTAL = MAX_VOICES * (VU_W + VU_GAP) + VU_EXTRA + VU_W;
+        int vuStartX = MAIN_W - VU_TOTAL - 1;  // 600 - 34 - 1 = 565
+
+        for (int v = 0; v < MAX_VOICES; ++v)
+        {
+            int vx = vuStartX + v * (VU_W + VU_GAP);
+            if (vuMeters[v]) vuMeters[v]->setBounds (SR (vx, VU_Y, VU_W, VU_H));
+        }
+
+        // MAIN meter sits VU_EXTRA pixels to the right of the last FDD meter
+        int mainX = vuStartX + MAX_VOICES * (VU_W + VU_GAP) + VU_EXTRA;
+        if (vuMeterMain) vuMeterMain->setBounds (SR (mainX, VU_Y, VU_W, VU_H));
+    }
+
+    // ── Waveform scope (below L/R meters) ─────────────────────────────────────
+    // MTR_X=8, two meter rows end at Y≈163, scope sits below with small gap
+    {
+        static constexpr int SCOPE_X = 8;
+        static constexpr int SCOPE_Y = 165;
+        static constexpr int SCOPE_W = 140;
+        static constexpr int SCOPE_H = 80;
+        if (scopeDisplay) scopeDisplay->setBounds (SR (SCOPE_X, SCOPE_Y, SCOPE_W, SCOPE_H));
+    }
 
     // ── Preset bar (two rows) ─────────────────────────────────────────────────
     static constexpr int PRESET_BAR_H  = 28;   // height of preset bar row
@@ -1608,24 +1908,46 @@ void FlopsterAudioProcessorEditor::resized()
         if (lblOctave)     lblOctave    ->setBounds (SR (OCT_L_PAD + OCT_BTN_W,              MAIN_H + PRESET_BAR_H + OCT_PAD, OCT_LBL_W, OCT_STRIP_H));
         if (btnOctaveUp)   btnOctaveUp  ->setBounds (SR (OCT_L_PAD + OCT_BTN_W + OCT_LBL_W, MAIN_H + PRESET_BAR_H + OCT_PAD, OCT_BTN_W, OCT_STRIP_H));
 
+        // Metronome controls on oct strip, right side
+        // Layout: [BPM input 38][gap 3][METRONOME 68][gap 3][TAP 30][gap 3][BeatDisplay 52]
+        // Total = 38+3+68+3+30+3+52 = 197px
+        {
+            static constexpr int METRO_START = MAIN_W - 201;
+            const int baseY = MAIN_H + PRESET_BAR_H + OCT_PAD;
+            if (bpmInput)     bpmInput    ->setBounds (SR (METRO_START,            baseY, 38, OCT_STRIP_H));
+            if (btnMetronome) btnMetronome->setBounds (SR (METRO_START + 41,       baseY, 68, OCT_STRIP_H));
+            if (btnTap)       btnTap      ->setBounds (SR (METRO_START + 112,      baseY, 30, OCT_STRIP_H));
+            if (beatDisplay)  beatDisplay ->setBounds (SR (METRO_START + 145,      baseY, 52, OCT_STRIP_H));
+
+            // Raise metronome controls above FX panels in z-order
+            if (bpmInput)     bpmInput    ->toFront (false);
+            if (btnMetronome) btnMetronome->toFront (false);
+            if (btnTap)       btnTap      ->toFront (false);
+            if (beatDisplay)  beatDisplay ->toFront (false);
+        }
+
         if (pixelKeyboard) pixelKeyboard->setBounds (SR (0, MAIN_H + PRESET_BAR_H + OCT_PAD + OCT_STRIP_H + OCT_KB_GAP,
                                                          MAIN_W, KEYBOARD_H - OCT_STRIP_H - OCT_PAD - OCT_KB_GAP - KB_PAD_B));
     }
     else
     {
         // Plugin mode: no octave controls, keyboard fills the full strip
-        if (pixelKeyboard) pixelKeyboard->setBounds (SR (0, MAIN_H + PRESET_BAR_H + OCT_PAD,
-                                                         MAIN_W, KEYBOARD_H - OCT_PAD - KB_PAD_B));
+        // No OCT_PAD here — keeps preset bar padding visually balanced
+        if (pixelKeyboard) pixelKeyboard->setBounds (SR (0, MAIN_H + PRESET_BAR_H,
+                                                         MAIN_W, KEYBOARD_H - KB_PAD_B));
     }
 
     // ── Scale button (credits bar, right side) ────────────────────────────────
     static constexpr int CREDITS_Y = MAIN_H + PRESET_BAR_H + KEYBOARD_H;
     static constexpr int SCALE_W     = 68;
-    static constexpr int CREDITS_H_R = 18;   // footer bar height
-    static constexpr int SCALE_BOX_H = 14;   // comfortable height for scale combo
+    static constexpr int CREDITS_H_R = 30;   // footer bar height
+    static constexpr int SCALE_BOX_H = 22;   // larger height for scale combo
+    // Centre in the full visual gap: KB_PAD_B (4px) above CREDITS_Y + CREDITS_H_R below.
+    // Offset from CREDITS_Y = (CREDITS_H_R + KB_PAD_B - SCALE_BOX_H) / 2 - KB_PAD_B = 2
+    static constexpr int SCALE_V_OFF = (CREDITS_H_R + KB_PAD_B - SCALE_BOX_H) / 2 - KB_PAD_B;
     if (scaleBox)
         scaleBox->setBounds (SR (MAIN_W - SCALE_W - 8,
-                                 CREDITS_Y + (CREDITS_H_R - SCALE_BOX_H) / 2,
+                                 CREDITS_Y + SCALE_V_OFF,
                                  SCALE_W, SCALE_BOX_H));
 
     // CRT overlay is drawn in paintOverChildren() — no bounds needed here.

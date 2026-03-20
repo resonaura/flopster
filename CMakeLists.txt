@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(Flopster VERSION 1.25)
+project(Flopster VERSION 2.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -39,7 +39,7 @@ set(FLOPSTER_ICON_PNG "${CMAKE_CURRENT_SOURCE_DIR}/assets/app.png")
 
 # ── Plugin target ─────────────────────────────────────────────────────────────
 juce_add_plugin(Flopster
-    VERSION                     "1.25"
+    VERSION                     "2.0"
     COMPANY_NAME                "Shiru & Resonaura"
     COMPANY_WEBSITE             "http://shiru.untergrund.net"
     PLUGIN_MANUFACTURER_CODE    Shru

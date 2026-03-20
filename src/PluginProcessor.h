@@ -123,6 +123,10 @@ struct FDDState
     // logical on/off flag.
     std::atomic<bool> spindle_audible { false };
 
+    // Peak level for the per-voice VU meter display (0..1 linear).
+    // Written (raise-only) on the audio thread; decayed and read on the GUI timer.
+    std::atomic<float> vuLevel { 0.0f };
+
     // Per-voice tail ring (for fadeouts on note changes)
     TailData tail_ring[MAX_TAILS] {};
     int      tail_ptr  = 0;
@@ -227,6 +231,13 @@ public:
     std::atomic<float> meterL { 0.0f };
     std::atomic<float> meterR { 0.0f };
 
+    // ── Scope / oscilloscope capture ─────────────────────────────────────────
+    // Written lock-free from the audio thread; read (with relaxed ordering) by
+    // the GUI timer for the waveform display.  Slight tearing is acceptable.
+    static constexpr int SCOPE_SIZE = 4096;
+    float            scopeBuffer[SCOPE_SIZE] {};
+    std::atomic<int> scopeWritePos { 0 };
+
     // Keyboard octave offset (in semitones, multiples of 12).
     // Written by the editor (message thread), read only in injectMidiNote —
     // never on the audio thread, so a plain int protected by the guiMidiLock
@@ -237,6 +248,18 @@ public:
     // of simply stopping.  Written by the editor (message thread), read on
     // the audio thread — std::atomic for safe cross-thread access.
     std::atomic<bool> returnMode { false };
+
+    // Effect bypass (written by message thread, read on audio thread)
+    std::atomic<bool> bcEnabled { true };
+    std::atomic<bool> tcEnabled { true };
+
+    // ── Metronome (standalone) ────────────────────────────────────────────────
+    // Written by the editor (message thread); read on the audio thread.
+    std::atomic<bool>  metronomeEnabled { false };
+    std::atomic<float> metronomeBpm     { 120.0f };
+    // Written (update) on the audio thread; read on the GUI timer.
+    // Stores current beat index 0-3.  -1 = never fired.
+    std::atomic<int>   metronomeBeat    { -1 };
 
 
 
@@ -365,6 +388,26 @@ private:
     };
 
     void handleMidiEvent (const MidiEvent& ev);
+
+    // ── Effects DSP state ─────────────────────────────────────────────────────
+    // Bitcrusher
+    float bc_downsampleCounter { 0.0f };
+    float bc_heldSampleL       { 0.0f };
+    float bc_heldSampleR       { 0.0f };
+
+    // ── Metronome DSP state ───────────────────────────────────────────────────
+    double metro_phase_samples { 0.0 };  // samples accumulated into current beat
+    float  metro_click_amp     { 0.0f }; // click envelope (0 = silent)
+    std::vector<float> m_metroBuf;       // per-block metro clicks, added post-effects
+
+    // Tail Crush (delay + bitcrusher on the delayed signal)
+    static constexpr int TC_DELAY_MAX_SAMPLES = 96000;  // 2 s @ 48 kHz
+    std::vector<float> tc_delayBufL;
+    std::vector<float> tc_delayBufR;
+    int   tc_writePos          { 0 };
+    float tc_downsampleCounter { 0.0f };
+    float tc_heldSampleL       { 0.0f };
+    float tc_heldSampleR       { 0.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FlopsterAudioProcessor)
 };
