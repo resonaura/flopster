@@ -122,12 +122,21 @@ target_link_libraries(Flopster
         juce::juce_recommended_warning_flags
 )
 
-# ── Windows: suppress CRT warnings ───────────────────────────────────────────
+# ── Windows: suppress CRT warnings + embed app icon ──────────────────────────
 if(WIN32)
     target_compile_definitions(Flopster
         PRIVATE
             _CRT_SECURE_NO_WARNINGS
             _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
+    )
+    # Post-build: replace the JUCE-generated icon in the standalone EXE with our
+    # pre-built app.ico (juceaide's PNG→ICO conversion produces a bad result).
+    add_custom_command(TARGET Flopster_Standalone POST_BUILD
+        COMMAND powershell -ExecutionPolicy Bypass -File
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/win-set-icon.ps1"
+            -ExePath "$<TARGET_FILE:Flopster_Standalone>"
+            -IcoPath "${CMAKE_CURRENT_SOURCE_DIR}/assets/app.ico"
+        COMMENT "Embedding app icon into Flopster.exe"
     )
 endif()
 

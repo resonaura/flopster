@@ -182,9 +182,9 @@ function runBash(scriptPath, extraArgs = []) {
   run("bash", [scriptPath, ...extraArgs]);
 }
 
-// Run a batch file via cmd
-function runBat(scriptPath, extraArgs = []) {
-  run("cmd", ["/c", scriptPath, ...extraArgs]);
+// Run a PowerShell script
+function runPwsh(scriptPath, extraArgs = []) {
+  run("powershell", ["-ExecutionPolicy", "Bypass", "-File", scriptPath, ...extraArgs]);
 }
 
 // Build a zip from a list of file paths into zipPath.
@@ -244,6 +244,14 @@ function buildToolArgs() {
   return args;
 }
 
+// PowerShell-style args (-Rebuild, -NoBuild) for PS1 scripts
+function buildToolArgsPwsh() {
+  const args = [];
+  if (doRebuild) args.push("-Rebuild");
+  if (noBuild) args.push("-NoBuild");
+  return args;
+}
+
 // ── Platform targets ──────────────────────────────────────────────────────────
 
 function distMac() {
@@ -272,9 +280,9 @@ function distWinArch(arch) {
   if (!isWin) die("Windows dist must be built on Windows.");
 
   step(`Building Windows installer (.msi) for ${arch}`);
-  const msiScript = path.join(TOOLS, "win-msi.bat");
-  if (!fs.existsSync(msiScript)) die(`Not found: tools/win-msi.bat`);
-  runBat(msiScript, [...buildToolArgs(), "--arch", arch]);
+  const msiScript = path.join(TOOLS, "win-msi.ps1");
+  if (!fs.existsSync(msiScript)) die(`Not found: tools/win-msi.ps1`);
+  runPwsh(msiScript, [...buildToolArgsPwsh(), "-Arch", arch]);
 
   const msi = path.join(DIST, `Flopster-${VERSION}-${arch}.msi`);
   if (!fs.existsSync(msi)) die(`Expected msi not found: ${msi}`);

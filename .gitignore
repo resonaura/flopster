@@ -92,3 +92,6 @@ x86/
 compile_commands.json
 
 .cache
+.wix
+/build-*
+.claude

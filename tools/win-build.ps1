@@ -1,4 +1,4 @@
-#Requires -Version 5.0
+﻿#Requires -Version 5.0
 <#
 .SYNOPSIS
     Flopster Windows Build Script
@@ -71,10 +71,7 @@ function Write-Status {
 }
 
 function Get-HostArchitecture {
-    $procArch = [System.Environment]::ProcessorCount
-    $osArch = [System.Environment]::Is64BitOperatingSystem
-
-    $env:PROCESSOR_ARCHITECTURE -match 'ARM64' ? 'arm64' : 'x64'
+    if ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') { 'arm64' } else { 'x64' }
 }
 
 function Find-VSInstallation {
@@ -241,7 +238,7 @@ $buildType = if ($Debug) { 'Debug' } else { 'Release' }
 $hostArch = Get-HostArchitecture
 
 # Determine target architecture
-$targetArch = $Arch ? $Arch : $hostArch
+$targetArch = if ($Arch) { $Arch } else { $hostArch }
 
 # Validate target architecture
 if ($targetArch -notmatch '^(arm64|x64|x86)$') {
@@ -330,7 +327,7 @@ if ($genInfo.UseNinja) {
 
         Write-Status "MSVC environment activated." 'ok'
     } else {
-        Write-Status "vcvarsall.bat not found — Ninja will use PATH as-is." 'warn'
+        Write-Status "vcvarsall.bat not found  -  Ninja will use PATH as-is." 'warn'
         Write-Host "  Cross-compilation may not work correctly."
         Write-Host "  Install Visual Studio 2022 Build Tools:"
         Write-Host "    https://aka.ms/vs/17/release/vs_buildtools.exe"
@@ -411,6 +408,9 @@ Write-Host
 Write-Status "Building Flopster ($buildType, $targetArch)..." 'build'
 Write-Host
 
+# Add build dir to PATH so juce_vst3_helper is found during post-build steps
+$env:PATH = $buildDir + ';' + $env:PATH
+
 & cmake --build $buildDir --config $buildType --parallel 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host
@@ -427,7 +427,7 @@ Write-Status "Verifying artifacts..." 'build'
 $artefactBase = Join-Path $buildDir "Flopster_artefacts\$buildType"
 $allOk = $true
 
-# VST3 — the inner DLL name encodes the arch: arm64-win, x86_64-win, x86-win
+# VST3  -  the inner DLL name encodes the arch: arm64-win, x86_64-win, x86-win
 $vst3ArchDirMap = @{
     'arm64' = 'arm64-win'
     'x64'   = 'x86_64-win'

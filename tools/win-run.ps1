@@ -1,7 +1,7 @@
-#Requires -Version 5.0
+﻿#Requires -Version 5.0
 <#
 .SYNOPSIS
-    Flopster — Windows Quick Run
+    Flopster  -  Windows Quick Run
     Rebuilds (if needed), installs Standalone, then launches it immediately.
     Useful for rapid test cycles without opening a DAW.
 
@@ -56,16 +56,16 @@ $rootDir = Split-Path -Parent $scriptDir
 
 # Determine target architecture
 if (-not $Arch) {
-    $Arch = ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') ? 'arm64' : 'x64'
+    $Arch = if ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') { 'arm64' } else { 'x64' }
 }
 
 # Banner
 Write-Host
 Write-Host "  +=======================================================+"
 if ($Full) {
-    Write-Host "  |   Flopster — Rebuild & Run  (full)                  |"
+    Write-Host "  |   Flopster  -  Rebuild & Run  (full)                  |"
 } else {
-    Write-Host "  |   Flopster — Rebuild & Run                           |"
+    Write-Host "  |   Flopster  -  Rebuild & Run                           |"
 }
 Write-Host "  |   by Shiru & Resonaura                               |"
 Write-Host "  +=======================================================+"
@@ -94,7 +94,7 @@ if ($Full) {
 }
 Write-Host "-----------------------------------------------"
 
-$onlyValue = $Full ? 'vst3,standalone' : 'standalone'
+$onlyValue = if ($Full) { 'vst3,standalone' } else { 'standalone' }
 $installArgs = @('-Only', $onlyValue, '-Arch', $Arch)
 
 & "$scriptDir\win-install.ps1" @installArgs

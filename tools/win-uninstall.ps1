@@ -1,7 +1,7 @@
-#Requires -Version 5.0
+﻿#Requires -Version 5.0
 <#
 .SYNOPSIS
-    Flopster — Windows Manual Uninstaller
+    Flopster  -  Windows Manual Uninstaller
     Removes all traces of a Flopster installation.
 
     For MSI-installed copies, prefer: msiexec /x Flopster-<ver>.msi
@@ -102,7 +102,7 @@ Test-Component 'Standalone (zip)'  $appZip   'app_zip'
 Test-Component 'Desktop shortcut'  $shortcut 'shortcut'
 
 if ($found.Count -eq 0) {
-    Write-Host "  [INFO]  Nothing to uninstall — no Flopster components detected."
+    Write-Host "  [INFO]  Nothing to uninstall  -  no Flopster components detected."
     Write-Host
     exit 0
 }
@@ -145,7 +145,7 @@ Write-Host "  -----------------------------------------------"
 
 $running = Get-Process -Name Flopster -ErrorAction SilentlyContinue
 if ($running) {
-    Write-Host "  [INFO]  Flopster.exe is running — terminating..."
+    Write-Host "  [INFO]  Flopster.exe is running  -  terminating..."
     try {
         $running | Stop-Process -Force
         Start-Sleep -Seconds 2
@@ -249,7 +249,7 @@ if ($errors -eq 0) {
 } else {
     Write-Host
     Write-Host "  [WARN]  Uninstall completed with $errors error(s)."
-    Write-Host "          Some files may not have been removed — see messages above."
+    Write-Host "          Some files may not have been removed  -  see messages above."
     Write-Host "          You may need to delete them manually or re-run as Administrator."
     Write-Host
 }

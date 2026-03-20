@@ -1,7 +1,7 @@
-#Requires -Version 5.0
+﻿#Requires -Version 5.0
 <#
 .SYNOPSIS
-    Flopster — Windows MSI Installer Builder
+    Flopster  -  Windows MSI Installer Builder
     Builds a proper Windows Installer (.msi) using WiX Toolset.
     Prefers WiX v4 (dotnet tool), falls back to WiX v3 (candle/light).
     Optionally builds the plugin from source if artefacts are missing.
@@ -78,10 +78,10 @@ $assetsDir   = Join-Path $rootDir 'assets'
 $samplesDir  = Join-Path $rootDir 'samples'
 
 if (-not $Arch) {
-    $Arch = ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') ? 'arm64' : 'x64'
+    $Arch = if ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') { 'arm64' } else { 'x64' }
 }
 
-$hostArch = ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') ? 'arm64' : 'x64'
+$hostArch = if ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') { 'arm64' } else { 'x64' }
 
 $buildDir    = Join-Path $rootDir "build-$Arch"
 $artefactDir = Join-Path $buildDir 'Flopster_artefacts\Release'
@@ -90,7 +90,7 @@ $exeSrc      = Join-Path $artefactDir 'Standalone\Flopster.exe'
 $wixWork     = Join-Path $buildDir 'wix-work'
 $stage       = Join-Path $wixWork 'stage'
 $msiName     = "Flopster-$versionShort-$Arch.msi"
-$outDir      = $Out ? $Out : (Join-Path $rootDir 'dist')
+$outDir      = if ($Out) { $Out } else { Join-Path $rootDir 'dist' }
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 Write-Host
@@ -106,7 +106,7 @@ Write-Host "  [INFO]  MSI name    : $msiName"
 Write-Host "  [INFO]  Build dir   : $buildDir"
 Write-Host
 
-# ── STEP 1 — Check prerequisites ─────────────────────────────────────────────
+# ── STEP 1  -  Check prerequisites ─────────────────────────────────────────────
 Write-Host "[1/6] Checking prerequisites..."
 Write-Host "-----------------------------------------------"
 Write-Host
@@ -158,7 +158,7 @@ if ($wixVer -eq 0) {
     Write-Host
     Write-Host "  [ERROR] WiX Toolset not found. Please install one of the following:"
     Write-Host
-    Write-Host "    WiX v4 (recommended — requires .NET SDK):"
+    Write-Host "    WiX v4 (recommended  -  requires .NET SDK):"
     Write-Host "      dotnet tool install --global wix"
     Write-Host "      .NET SDK: https://dotnet.microsoft.com/download"
     Write-Host
@@ -171,7 +171,7 @@ if ($wixVer -eq 0) {
 Write-Host "  [INFO]  Using WiX version : $wixVer"
 Write-Host
 
-# ── STEP 2 — Build plugin (if needed) ────────────────────────────────────────
+# ── STEP 2  -  Build plugin (if needed) ────────────────────────────────────────
 Write-Host "[2/6] Build..."
 Write-Host "-----------------------------------------------"
 Write-Host
@@ -182,7 +182,7 @@ if ($NoBuild) {
     $needBuild = $Rebuild -or (-not (Test-Path $exeSrc)) -or (-not (Test-Path $vst3Src))
 
     if (-not $needBuild) {
-        Write-Host "  [OK]    Release artefacts already present — skipping build."
+        Write-Host "  [OK]    Release artefacts already present  -  skipping build."
         Write-Host "          Pass -Rebuild to force recompilation."
     } else {
         $buildArgs = @('-Arch', $Arch)
@@ -199,7 +199,7 @@ if ($NoBuild) {
 
 Write-Host
 
-# ── STEP 3 — Verify artefacts ─────────────────────────────────────────────────
+# ── STEP 3  -  Verify artefacts ─────────────────────────────────────────────────
 Write-Host "[3/6] Verifying artefacts..."
 Write-Host "-----------------------------------------------"
 Write-Host
@@ -228,12 +228,12 @@ $hasBanner = Test-Path (Join-Path $assetsDir 'app.png')
 if ($hasBanner) {
     Write-Host "  [OK]    Banner image (app.png) found."
 } else {
-    Write-Host "  [WARN]  app.png not found — installer will use default WiX banner."
+    Write-Host "  [WARN]  app.png not found  -  installer will use default WiX banner."
 }
 
 Write-Host
 
-# ── STEP 4 — Stage files ──────────────────────────────────────────────────────
+# ── STEP 4  -  Stage files ──────────────────────────────────────────────────────
 Write-Host "[4/6] Staging installation layout..."
 Write-Host "-----------------------------------------------"
 Write-Host
@@ -284,13 +284,13 @@ if ($hasBanner) {
         $hasIco = $true
         Write-Host "  [OK]    Icon converted: Flopster.ico"
     } catch {
-        Write-Host "  [WARN]  PNG to ICO conversion failed — installer will have no icon."
+        Write-Host "  [WARN]  PNG to ICO conversion failed  -  installer will have no icon."
     }
 }
 
 Write-Host
 
-# ── STEP 5 — Generate WXS file ───────────────────────────────────────────────
+# ── STEP 5  -  Generate WXS file ───────────────────────────────────────────────
 Write-Host "[5/6] Generating WiX source file..."
 Write-Host "-----------------------------------------------"
 Write-Host
@@ -446,8 +446,7 @@ $saXml
              Description="Install Flopster audio plugin."
              Level="1"
              ConfigurableDirectory="INSTALLDIR_SA"
-             Display="expand"
-             Absent="disallow">
+             Display="expand">
 
       <Feature Id="FeatureVST3"
                Title="VST3 Plugin"
@@ -580,7 +579,7 @@ Set-Content -Path $wxsPath -Value $wxsContent -Encoding UTF8
 Write-Host "  [OK]    Flopster.wxs written: $wxsPath"
 Write-Host
 
-# ── STEP 6 — Build MSI ───────────────────────────────────────────────────────
+# ── STEP 6  -  Build MSI ───────────────────────────────────────────────────────
 Write-Host "[6/6] Building MSI..."
 Write-Host "-----------------------------------------------"
 Write-Host
@@ -597,7 +596,7 @@ if ($wixVer -eq 4) {
         Write-Host "  [INFO]  Adding WiX UI extension..."
         & wix extension add WixToolset.UI.wixext
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  [WARN]  Could not add WixToolset.UI.wixext — UI may be minimal."
+            Write-Host "  [WARN]  Could not add WixToolset.UI.wixext  -  UI may be minimal."
         }
     }
 
@@ -610,7 +609,7 @@ if ($wixVer -eq 4) {
 
 } else {
     $wixObj    = Join-Path $wixWork 'Flopster.wixobj'
-    $candleArch = @{ 'x86' = 'x86'; 'arm64' = 'arm64' }[$Arch] ?? 'x64'
+    $candleArch = if (@{ 'x86' = 'x86'; 'arm64' = 'arm64' }.ContainsKey($Arch)) { @{ 'x86' = 'x86'; 'arm64' = 'arm64' }[$Arch] } else { 'x64' }
 
     Write-Host "  [INFO]  candle.exe ..."
     & $wix3Candle -nologo -arch $candleArch -ext WixUIExtension -out $wixObj $wxsPath

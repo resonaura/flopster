@@ -1050,13 +1050,8 @@ void FlopsterAudioProcessorEditor::buildKbMap()
         { '7', 82 }, // A#5
         { '9', 85 }, // C#6
         { '0', 87 }, // D#6
-#if JUCE_MAC
-        { '=', 90 }, // F#6  (macOS: = is black key between [ and ])
-        { '-', 92 }, // G#6  (macOS: - is black key after ])
-#else
-        { '-', 90 }, // F#6
-        { '=', 92 }, // G#6
-#endif
+        { '=', 90 }, // F#6
+        { '-', 92 }, // G#6
     };
 
     kbMap.clear();

@@ -1,7 +1,7 @@
-#Requires -Version 5.0
+﻿#Requires -Version 5.0
 <#
 .SYNOPSIS
-    Flopster — Windows End-User Installer
+    Flopster  -  Windows End-User Installer
     No build tools required. Just run this script.
     Handles first install and updates. Backs up previous version.
     by Shiru & Resonaura
@@ -94,11 +94,11 @@ if ($hadExe)     { $isUpdate = $true; Write-Host "  [INFO]  Found existing Stand
 
 if ($isUpdate) {
     Write-Host
-    Write-Host "  [INFO]  Existing installation detected — this will be an update."
+    Write-Host "  [INFO]  Existing installation detected  -  this will be an update."
     Write-Host "          A backup will be saved to: $backupDir"
     Write-Host "          It will be restored automatically if anything goes wrong."
 } else {
-    Write-Host "  [INFO]  No existing installation found — fresh install."
+    Write-Host "  [INFO]  No existing installation found  -  fresh install."
 }
 Write-Host
 
@@ -124,7 +124,7 @@ Write-Host
 
 $running = Get-Process -Name Flopster -ErrorAction SilentlyContinue
 if ($running) {
-    Write-Host "  [INFO]  Flopster.exe is running — attempting to close it..."
+    Write-Host "  [INFO]  Flopster.exe is running  -  attempting to close it..."
     try {
         $running | Stop-Process -Force
         Start-Sleep -Seconds 2
@@ -166,7 +166,7 @@ if ($isUpdate) {
     }
     Write-Host
 } else {
-    Write-Host "[4/5] Backup — skipped (fresh install)."
+    Write-Host "[4/5] Backup  -  skipped (fresh install)."
     Write-Host "-----------------------------------------------"
     Write-Host
 }
@@ -227,7 +227,7 @@ function Invoke-Rollback {
     Write-Host "  [WARN]  Rolling back to previous version..."
 
     if (-not (Test-Path $backupDir)) {
-        Write-Host "  [WARN]  No backup found — cannot restore."
+        Write-Host "  [WARN]  No backup found  -  cannot restore."
         return
     }
 
@@ -321,7 +321,7 @@ try {
     $s  = $ws.CreateShortcut($shortcut)
     $s.TargetPath       = $appDst
     $s.WorkingDirectory = $appDir
-    $s.Description      = 'Flopster — floppy drive instrument'
+    $s.Description      = 'Flopster  -  floppy drive instrument'
     $s.Save()
     Write-Host "  [OK]    Desktop shortcut updated: $shortcut"
 } catch {

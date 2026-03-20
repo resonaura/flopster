@@ -1,4 +1,4 @@
-#Requires -Version 5.0
+﻿#Requires -Version 5.0
 <#
 .SYNOPSIS
     Flopster Windows Installer
@@ -73,7 +73,7 @@ function Write-Status {
 }
 
 function Get-HostArchitecture {
-    $env:PROCESSOR_ARCHITECTURE -match 'ARM64' ? 'arm64' : 'x64'
+    if ($env:PROCESSOR_ARCHITECTURE -match 'ARM64') { 'arm64' } else { 'x64' }
 }
 
 function Parse-OnlyFormats {
@@ -315,7 +315,7 @@ $samplesDir = Join-Path $rootDir 'samples'
 $hostArch = Get-HostArchitecture
 
 # Determine target architecture
-$targetArch = $Arch ? $Arch : $hostArch
+$targetArch = if ($Arch) { $Arch } else { $hostArch }
 
 # Validate target architecture
 if ($targetArch -notmatch '^(arm64|x64|x86)$') {
@@ -385,7 +385,7 @@ if (Get-Command ninja -ErrorAction SilentlyContinue) {
     $ninjaVersion = & ninja --version 2>&1
     Write-Status "ninja $ninjaVersion" 'ok'
 } else {
-    Write-Status "ninja not found — will try Visual Studio generator as fallback." 'warn'
+    Write-Status "ninja not found  -  will try Visual Studio generator as fallback." 'warn'
 }
 
 # ── 2. Determine generator + arch flags ──────────────────────────────────────
@@ -439,7 +439,7 @@ if ($genInfo.UseNinja) {
 
         Write-Status "MSVC environment activated." 'ok'
     } else {
-        Write-Status "vcvarsall.bat not found — Ninja will use PATH as-is." 'warn'
+        Write-Status "vcvarsall.bat not found  -  Ninja will use PATH as-is." 'warn'
     }
 }
 
