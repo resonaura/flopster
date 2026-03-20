@@ -199,9 +199,26 @@ if defined _VS_ANY_VER (
     for /f "tokens=1 delims=." %%M in ("!_VS_ANY_VER!") do set "_VS_MAJOR=%%M"
 )
 
-:: Map major → CMake generator name (extend list here for future VS releases)
+:: For VS >= 18 (e.g. VS 2026): CMake may not know the generator name yet.
+:: Use VS-bundled Ninja instead — it ships at a known path inside every VS install.
+if defined _VS_ANY_PATH (
+    if defined _VS_MAJOR (
+        if !_VS_MAJOR! GEQ 18 (
+            set "_BUNDLED_NINJA=!_VS_ANY_PATH!\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
+            if exist "!_BUNDLED_NINJA!" (
+                set "PATH=!_VS_ANY_PATH!\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;!PATH!"
+                set "GENERATOR=Ninja"
+                set "USE_NINJA=1"
+                echo  [ok] Found Visual Studio !_VS_ANY_VER!
+                echo  [ok] Using VS-bundled Ninja
+                goto generator_done
+            )
+        )
+    )
+)
+
+:: Map major → CMake generator name for older VS versions
 set "_VS_GEN="
-if "!_VS_MAJOR!"=="18" set "_VS_GEN=Visual Studio 18 2026"
 if "!_VS_MAJOR!"=="17" set "_VS_GEN=Visual Studio 17 2022"
 if "!_VS_MAJOR!"=="16" set "_VS_GEN=Visual Studio 16 2019"
 if "!_VS_MAJOR!"=="15" set "_VS_GEN=Visual Studio 15 2017"
@@ -214,10 +231,10 @@ if defined _VS_GEN (
     goto generator_done
 )
 
-:: VS found but major version not mapped — warn and fall through to Ninja
+:: VS found but no generator resolved — fall through to Ninja in PATH
 if defined _VS_ANY_PATH (
-    echo  [warn] Visual Studio !_VS_ANY_VER! found but no CMake generator name is known for it.
-    echo  [warn] Falling back to Ninja.  Set up the environment manually if needed.
+    echo  [warn] Visual Studio !_VS_ANY_VER! found but could not resolve a build generator.
+    echo  [warn] Falling back to Ninja in PATH.
 )
 
 :: ── Try Ninja ─────────────────────────────────────────────────────────────────
