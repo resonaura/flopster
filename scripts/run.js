@@ -8,8 +8,8 @@
 //   node scripts/run.js <action> [args...]
 //
 // Actions:
-//   build    → tools/mac-build.sh  / tools/win-build.bat  / tools/linux-build.sh
-//   install  → tools/mac-install.sh / tools/win-install.bat / tools/linux-install.sh
+//   build    → tools/mac-build.sh  / tools/win-build.ps1  / tools/linux-build.sh
+//   install  → tools/mac-install.sh / tools/win-install.ps1 / tools/linux-install.sh
 //   pkg      → tools/mac-pkg.sh       (macOS only — produces .pkg)
 //   msi      → tools/win-msi.bat      (Windows only — produces .msi)
 //   deb      → tools/linux-deb.sh     (Linux only — produces .deb)
@@ -75,6 +75,18 @@ function resolveWinArchList(args) {
   return defaultWinArchList();
 }
 
+// Convert --gnu-style-args to -PsStyleArgs for PowerShell scripts
+// e.g. --rebuild → -Rebuild, --arch → -Arch, --no-build → -NoBuild
+function convertArgsToPwsh(args) {
+  return args.map((a) => {
+    if (!a.startsWith("--")) return a;
+    const name = a
+      .slice(2)
+      .replace(/-([a-z])/g, (_, c) => c.toUpperCase()); // kebab-case → camelCase
+    return "-" + name.charAt(0).toUpperCase() + name.slice(1);
+  });
+}
+
 // Strip --arch <value> from args array (we inject it ourselves per iteration)
 function stripArchFlag(args) {
   const out = [];
@@ -93,19 +105,19 @@ function stripArchFlag(args) {
 const SCRIPTS = {
   build: {
     darwin: { cmd: "bash", script: "mac-build.sh" },
-    win32: { cmd: "cmd", script: "win-build.bat", bat: true },
+    win32: { cmd: "powershell", script: "win-build.ps1", pwsh: true },
     linux: { cmd: "bash", script: "linux-build.sh" },
   },
   install: {
     darwin: { cmd: "bash", script: "mac-install.sh" },
-    win32: { cmd: "cmd", script: "win-install.bat", bat: true },
+    win32: { cmd: "powershell", script: "win-install.ps1", pwsh: true },
     linux: { cmd: "bash", script: "linux-install.sh" },
   },
   pkg: {
     darwin: { cmd: "bash", script: "mac-pkg.sh" },
   },
   msi: {
-    win32: { cmd: "cmd", script: "win-msi.bat", bat: true },
+    win32: { cmd: "powershell", script: "win-msi.ps1", pwsh: true },
   },
   deb: {
     linux: { cmd: "bash", script: "linux-deb.sh" },
@@ -115,7 +127,7 @@ const SCRIPTS = {
   },
   run: {
     darwin: { cmd: "bash", script: "mac-run.sh" },
-    win32: { cmd: "cmd", script: "win-run.bat", bat: true },
+    win32: { cmd: "powershell", script: "win-run.ps1", pwsh: true },
     linux: { cmd: "bash", script: "linux-run.sh" },
   },
 };
@@ -179,7 +191,7 @@ const WIN_MULTI_ARCH_ACTIONS = ["build", "install", "msi"]; // "run" is intentio
 
 if (
   platform === "win32" &&
-  entry.bat &&
+  (entry.bat || entry.pwsh) &&
   WIN_MULTI_ARCH_ACTIONS.includes(action)
 ) {
   const archList = resolveWinArchList(passthrough);
@@ -189,7 +201,9 @@ if (
 
   for (const arch of archList) {
     console.log(`\n  ══ arch: ${arch} ══\n`);
-    const spawnArgs = ["/c", scriptPath, ...baseArgs, "--arch", arch];
+    const spawnArgs = entry.pwsh
+      ? ["-ExecutionPolicy", "Bypass", "-File", scriptPath, ...convertArgsToPwsh(baseArgs), "-Arch", arch]
+      : ["/c", scriptPath, ...baseArgs, "--arch", arch];
     const result = spawnSync(entry.cmd, spawnArgs, {
       stdio: "inherit",
       cwd: ROOT,
@@ -214,7 +228,9 @@ if (
 // Non-Windows or non-multi-arch action — single run as before
 const spawnArgs = entry.bat
   ? ["/c", scriptPath, ...passthrough]
-  : [scriptPath, ...passthrough];
+  : entry.pwsh
+    ? ["-ExecutionPolicy", "Bypass", "-File", scriptPath, ...convertArgsToPwsh(passthrough)]
+    : [scriptPath, ...passthrough];
 
 const result = spawnSync(entry.cmd, spawnArgs, {
   stdio: "inherit",
