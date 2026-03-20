@@ -209,7 +209,8 @@ if "!_VS_MAJOR!"=="15" set "_VS_GEN=Visual Studio 15 2017"
 if defined _VS_GEN (
     set "GENERATOR=!_VS_GEN!"
     set "CMAKE_ARCH_FLAG=-A !VS_PLATFORM!"
-    echo  [ok] Found Visual Studio !_VS_ANY_VER! ^(generator: !_VS_GEN!^)
+    echo  [ok] Found Visual Studio !_VS_ANY_VER!
+    echo  [ok] CMake generator: !_VS_GEN!
     goto generator_done
 )
 
