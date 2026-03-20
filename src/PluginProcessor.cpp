@@ -148,11 +148,22 @@ FlopsterAudioProcessor::FlopsterAudioProcessor()
     // while reading .wav files from disk.  Instead we set the flag and let the
     // editor's message-thread timer call loadAllSamples() on the first tick.
     sampleLoadNeeded = true;
+    triggerAsyncUpdate();
 }
 
 FlopsterAudioProcessor::~FlopsterAudioProcessor()
 {
+    cancelPendingUpdate();
     freeAllSamples();
+}
+
+//==============================================================================
+void FlopsterAudioProcessor::handleAsyncUpdate()
+{
+    // Called on the message thread — safe to do file I/O here.
+    // Loads samples whenever the flag is set, even when the editor is closed.
+    if (sampleLoadNeeded.load())
+        loadAllSamples();
 }
 
 //==============================================================================
@@ -279,7 +290,8 @@ void FlopsterAudioProcessor::setCurrentProgram (int index)
 {
     if (index < 0 || index >= NUM_PROGRAMS) return;
     currentProgram   = index;
-    sampleLoadNeeded = true;   // message-thread timer will call loadAllSamples()
+    sampleLoadNeeded = true;
+    triggerAsyncUpdate();
 }
 
 const juce::String FlopsterAudioProcessor::getProgramName (int index)
@@ -308,7 +320,8 @@ void FlopsterAudioProcessor::setStateInformation (const void* data, int sizeInBy
         currentProgram = juce::jlimit (0, NUM_PROGRAMS - 1,
                              (int) tree.getProperty ("currentProgram", 0));
         currentProgramLoaded = -1;      // force sample reload
-        sampleLoadNeeded     = true;    // message-thread timer picks this up
+        sampleLoadNeeded     = true;
+        triggerAsyncUpdate();
         editorNeedsPresetRefresh = true; // editor syncs combo-box + images
         apvts.replaceState (tree);
     }

@@ -137,12 +137,15 @@ struct FDDState
 
 //==============================================================================
 class FlopsterAudioProcessor  : public juce::AudioProcessor,
+                                 public juce::AsyncUpdater,
                                  public juce::AudioProcessorValueTreeState::Listener
 {
 public:
     //==========================================================================
     FlopsterAudioProcessor();
     ~FlopsterAudioProcessor() override;
+
+    void handleAsyncUpdate() override;
 
     //==========================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
