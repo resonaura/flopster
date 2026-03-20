@@ -73,6 +73,14 @@ juce_add_plugin(Flopster
 
 juce_generate_juce_header(Flopster)
 
+juce_add_binary_data(FlopsterFonts
+    NAMESPACE BinaryData
+    HEADER_NAME BinaryData.h
+    SOURCES
+        fonts/PixgamerRegular.ttf
+        fonts/PixelEmulator.ttf
+)
+
 # ── Sources ───────────────────────────────────────────────────────────────────
 target_sources(Flopster
     PRIVATE
@@ -99,6 +107,7 @@ target_compile_definitions(Flopster
 # ── Link libraries ────────────────────────────────────────────────────────────
 target_link_libraries(Flopster
     PRIVATE
+        FlopsterFonts
         juce::juce_audio_utils
         juce::juce_audio_processors
         juce::juce_audio_plugin_client

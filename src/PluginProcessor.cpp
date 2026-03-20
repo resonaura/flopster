@@ -14,10 +14,6 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     auto gainV2T = [](float v, int) { return juce::String ((int)(v * 100.0f)); };
     auto gainT2V = [](const juce::String& t) { return t.getFloatValue() / 100.0f; };
 
-    // Slide speed: display as 1..200 ms per semitone
-    auto slideV2T = [](float v, int) { return juce::String ((int)(v * 199.0f + 1.0f)) + "ms"; };
-    auto slideT2V = [](const juce::String& t) { return (t.getFloatValue() - 1.0f) / 199.0f; };
-
     // Detune: display as -99..+99 semitone-cents
     auto detuneV2T = [](float v, int) { return juce::String ((int)((v - 0.5f) * 198.0f)); };
     auto detuneT2V = [](const juce::String& t) { return t.getFloatValue() / 198.0f + 0.5f; };
@@ -77,12 +73,6 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         juce::AudioParameterFloatAttributes().withValueFromStringFunction (gainT2V)
                                               .withStringFromValueFunction (gainV2T)));
 
-    params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "slideSpeed", "Slide Speed",
-        juce::NormalisableRange<float> (0.0f, 1.0f), 0.1f,
-        juce::AudioParameterFloatAttributes().withValueFromStringFunction (slideT2V)
-                                              .withStringFromValueFunction (slideV2T)));
-
     return { params.begin(), params.end() };
 }
 
@@ -105,7 +95,6 @@ FlopsterAudioProcessor::FlopsterAudioProcessor()
     rawDetune       = apvts.getRawParameterValue ("detune");
     rawOctaveShift  = apvts.getRawParameterValue ("octaveShift");
     rawOutputGain   = apvts.getRawParameterValue ("outputGain");
-    rawSlideSpeed   = apvts.getRawParameterValue ("slideSpeed");
 
     for (int i = 0; i < NUM_PROGRAMS; ++i)
         programNames[i] = "empty";
@@ -651,10 +640,6 @@ bool FlopsterAudioProcessor::anyVoiceActive() const
 //==============================================================================
 int FlopsterAudioProcessor::allocateVoice (int note)
 {
-    // Slide mode — always trigger voice 0; voice 1 is managed internally by startVoice.
-    if (slideMode.load())
-        return 0;
-
     // Re-trigger an existing voice that's already playing this note
     for (int v = 0; v < numVoices; ++v)
         if (FDD[v].assigned_note == note) return v;
@@ -677,41 +662,7 @@ void FlopsterAudioProcessor::startVoice (int v, int note, int vel)
     fdd.assigned_note = note;
     displayVoice = v;
 
-    // ── Slide / portamento ────────────────────────────────────────────────────
-    // Simple mono portamento on FDD[0] only.
-    // FDD[1] is never used in slide mode — no crossfade, no dual-voice mixing.
-    // On each new note we just update low_freq_add_target; the per-sample loop
-    // in processBlock glides low_freq_add toward the target smoothly.
-    // Pitch is computed with detune + octave via noteToLowFreqAdd().
-    if (slideMode.load() && note < SPECIAL_NOTE)
-    {
-        double notePitch = noteToLowFreqAdd (note);
 
-        if (slideLastNote < 0 || FDD[0].low_freq_add <= 0.0f)
-        {
-            // Very first note — snap to exact pitch immediately, no glide.
-            FDD[0].low_freq_add        = (float)notePitch;
-            FDD[0].low_freq_add_target = (float)notePitch;
-            FDD[0].slide_pitch_active  = false;
-        }
-        else
-        {
-            // Subsequent note — set target, glide will happen in processBlock.
-            FDD[0].low_freq_add_target = (float)notePitch;
-            FDD[0].slide_pitch_active  = (std::fabs (FDD[0].low_freq_add - (float)notePitch) > 1e-10f);
-        }
-
-        // FDD[1] stays silent and unused in slide mode.
-        FDD[1].low_freq_add       = 0.0f;
-        FDD[1].low_freq_add_target = 0.0f;
-        FDD[1].slide_pitch_active  = false;
-        FDD[1].slide_gain_active   = false;
-        FDD[1].slide_gain          = 0.0f;
-        FDD[1].slide_gain_target   = 0.0f;
-
-        slideLastNote = note;
-        // The rest of startVoice configures the head sample for voice v (=0).
-    }
 
     bool spindleStop = true;
     bool headStop    = true;
@@ -773,10 +724,7 @@ void FlopsterAudioProcessor::startVoice (int v, int note, int vel)
 
         case 1:
             if (! prevAny) fdd.low_freq_acc = 1.0f;
-            if (! slideMode.load())
-            {
-                fdd.low_freq_add = (float)noteToLowFreqAdd (note);
-            }
+            fdd.low_freq_add = (float)noteToLowFreqAdd (note);
             resetLowFreq = false;
             break;
 
@@ -811,9 +759,7 @@ void FlopsterAudioProcessor::startVoice (int v, int note, int vel)
         if (resetLowFreq)
         {
             fdd.low_freq_acc = 0;
-            // Do not zero low_freq_add when slide mode is active — preserve slide state.
-            if (! slideMode.load())
-                fdd.low_freq_add = 0;
+            fdd.low_freq_add = 0;
         }
     }
 
@@ -822,9 +768,7 @@ void FlopsterAudioProcessor::startVoice (int v, int note, int vel)
     if (headStop)
     {
         fdd.low_freq_acc = 0;
-        // Preserve low_freq_add in slide mode so gliding can continue correctly.
-        if (! slideMode.load())
-            fdd.low_freq_add = 0;
+        fdd.low_freq_add = 0;
         fdd.head_sample_loop_done = true;
     }
 }
@@ -835,10 +779,7 @@ void FlopsterAudioProcessor::stopVoice (int v)
     fdd.assigned_note = -1;
     floppySpindle (fdd, false);
     fdd.low_freq_acc = 0;
-    // In slide mode keep low_freq_add so the next note knows where to glide from.
-    // In normal mode zero it out as before.
-    if (! slideMode.load())
-        fdd.low_freq_add = 0;
+    fdd.low_freq_add = 0;
 
     // Return mode: stop the sample immediately and reset head/spindle positions.
     if (returnMode.load())
@@ -1186,23 +1127,6 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
 
         // Render audio sample-by-sample across all active voices
-        // Slide mode: compute per-sample pitch coefficient.
-        // coeff = ratio by which slide_step_current moves toward slide_step_target
-        // each sample.  slideSpeed raw value 0..1 → 1..200 ms/semitone.
-        double slideCoeff = 0.0;
-        if (slideMode.load())
-        {
-            double sr = getSampleRate();
-            if (sr <= 0.0) sr = 44100.0;
-            // ms per semitone → samples per semitone
-            double msPerSemitone  = (double)pSlideSpeed() * 199.0 + 1.0;
-            double sampPerSemitone = msPerSemitone * sr / 1000.0;
-            // A semitone is a ratio of 2^(1/12) ≈ 1.05946.
-            // We move slide_step_current by a multiplicative factor each sample
-            // so that it traverses one semitone in sampPerSemitone samples.
-            // factor = 2^(1/12)^(1/sampPerSemitone) = 2^(1/(12*sampPerSemitone))
-            slideCoeff = std::pow (2.0, 1.0 / (12.0 * sampPerSemitone));
-        }
 
 
 
@@ -1210,32 +1134,9 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
             float mixed = 0.0f;
 
-            // Slide mode: only FDD[0], simple mono portamento pitch glide.
-            if (slideMode.load())
+            for (int v = 0; v < numVoices; ++v)
             {
-                FDDState& fdd = FDD[0];
-
-                // Glide low_freq_add toward target one multiplicative step at a time.
-                if (fdd.slide_pitch_active && slideCoeff > 1.0)
-                {
-                    double cur = fdd.low_freq_add;
-                    double tgt = fdd.low_freq_add_target;
-                    if (cur < tgt)
-                    {
-                        cur *= slideCoeff;
-                        if (cur >= tgt) { cur = tgt; fdd.slide_pitch_active = false; }
-                    }
-                    else if (cur > tgt)
-                    {
-                        cur /= slideCoeff;
-                        if (cur <= tgt) { cur = tgt; fdd.slide_pitch_active = false; }
-                    }
-                    else
-                    {
-                        fdd.slide_pitch_active = false;
-                    }
-                    fdd.low_freq_add = (float)cur;
-                }
+                FDDState& fdd = FDD[v];
 
                 fdd.low_freq_acc += fdd.low_freq_add;
                 if (fdd.low_freq_acc >= 1.0f)
@@ -1244,23 +1145,7 @@ void FlopsterAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                     floppyStep (fdd, -1);
                 }
 
-                mixed = renderOneSample (fdd);
-            }
-            else
-            {
-                for (int v = 0; v < numVoices; ++v)
-                {
-                    FDDState& fdd = FDD[v];
-
-                    fdd.low_freq_acc += fdd.low_freq_add;
-                    if (fdd.low_freq_acc >= 1.0f)
-                    {
-                        while (fdd.low_freq_acc >= 1.0f) fdd.low_freq_acc -= 1.0f;
-                        floppyStep (fdd, -1);
-                    }
-
-                    mixed += renderOneSample (fdd);
-                }
+                mixed += renderOneSample (fdd);
             }
 
             outL[s] = mixed;

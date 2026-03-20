@@ -29,7 +29,7 @@
 
 #define MAX_TAILS               16
 #define MAX_VOICES              3
-#define SLIDE_VOICES            1   // slide mode is mono — always voice 0
+
 
 //==============================================================================
 enum SampleType
@@ -94,8 +94,6 @@ struct FDDState
     float       head_level              = 0.0f;
     float       head_fade_level         = 0.0f;
     double      sample_step             = 1.0;
-    bool        slide_pitch_active      = false; // true while pitch is still gliding
-    bool        slide_gain_active       = false; // true while crossfade gain is still moving
     bool        head_buzz               = false;
 
     int head_pos      = 0;   // 0..159
@@ -105,11 +103,7 @@ struct FDDState
 
     float low_freq_acc = 0.0f;
     float low_freq_add = 0.0f;
-    float low_freq_add_target = 0.0f;  // target pitch for slide interpolation
 
-    // Crossfade gain for slide mode: voice 0 = old note (1→0), voice 1 = new note (0→1)
-    float slide_gain        = 1.0f;   // current rendered gain (0..1)
-    float slide_gain_target = 1.0f;   // target gain we're fading toward
 
     int sample_type = SAMPLE_TYPE_NONE;
 
@@ -244,21 +238,21 @@ public:
     // the audio thread — std::atomic for safe cross-thread access.
     std::atomic<bool> returnMode { false };
 
-    // Slide (portamento) mode: glide between notes using pitch interpolation.
-    // When on, numVoices is forced to SLIDE_VOICES and btnVoices is locked.
-    std::atomic<bool> slideMode { false };
 
-    // Slide speed: seconds to travel one semitone (0.01 = fast, 0.5 = slow).
-    // Written by editor (message thread), read on audio thread — atomic float.
-    std::atomic<float> slideSpeed { 0.05f };
-
-    // Last note played (used by slide mode to compute start pitch).
-    // Written on audio thread only.
-    int slideLastNote { -1 };
 
     // Load all samples for the current program.
     // MUST be called on the message thread only (does file I/O under samplesLock).
     void loadAllSamples();
+
+    // Read-only snapshot of which MIDI notes are currently held.
+    // Safe to call from the message thread (GUI timer) — individual uint8_t
+    // reads are atomic on all supported platforms, and a slightly stale value
+    // is acceptable for a visual display.
+    bool isMidiNoteOn (int note) const
+    {
+        if (note < 0 || note > 127) return false;
+        return midiKeyState[note] > 0;
+    }
 
 private:
     //==========================================================================
@@ -279,7 +273,7 @@ private:
     const std::atomic<float>* rawSpindleGain  = nullptr;
     const std::atomic<float>* rawNoisesGain   = nullptr;
     const std::atomic<float>* rawDetune       = nullptr;
-    const std::atomic<float>* rawSlideSpeed   = nullptr;
+
     const std::atomic<float>* rawOctaveShift  = nullptr;
     const std::atomic<float>* rawOutputGain   = nullptr;
 
@@ -291,7 +285,7 @@ private:
     float pNoisesGain()   const noexcept { return rawNoisesGain   ? rawNoisesGain->load()   : 0.5f; }
     float pDetune()       const noexcept { return rawDetune       ? rawDetune->load()       : 0.5f; }
     float pOctaveShift()  const noexcept { return rawOctaveShift  ? rawOctaveShift->load()  : 0.5f; }
-    float pSlideSpeed()   const noexcept { return rawSlideSpeed   ? rawSlideSpeed->load()   : 0.1f; }
+
     float pOutputGain()   const noexcept { return rawOutputGain   ? rawOutputGain->load()   : 1.0f; }
 
     //==========================================================================
@@ -348,7 +342,7 @@ private:
 
     //==========================================================================
     // Floppy helpers (all operate on a specific FDD voice)
-    double noteToLowFreqAdd (int note) const;
+    double noteToLowFreqAdd (int note) const; // pitch freq/sr for a MIDI note with detune+octave
     void  tailAdd           (FDDState& fdd, SampleData* sample, double ptr, double step, float level);
     void  floppyStartHead   (FDDState& fdd, SampleData* sample, float gain, int type, bool loop, bool buzz, double relative);
     void  floppyStep        (FDDState& fdd, int pos);

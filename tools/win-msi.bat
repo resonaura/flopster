@@ -475,10 +475,29 @@ if exist "%ASSETS%\scanlines.png" copy /y "%ASSETS%\scanlines.png" "%STAGE_SA%\"
 xcopy /e /i /q /y "%SAMPLES%" "%STAGE_SA%\samples\" >nul
 echo  [OK]    Standalone staged (with resources + samples).
 
-:: ── Banner image ─────────────────────────────────────────────────────────────
+:: ── Banner image + ICO conversion ────────────────────────────────────────────
+set "HAS_ICO=0"
 if "!HAS_BANNER!"=="1" (
     copy /y "%ASSETS%\app.png" "%WIX_WORK%\banner.png" >nul
     echo  [OK]    Banner image staged.
+
+    :: Convert PNG -> ICO via PowerShell System.Drawing so WiX can use it as an icon
+    set "ICO_OUT=%WIX_WORK%\Flopster.ico"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "Add-Type -AssemblyName System.Drawing; ^
+         $bmp = [System.Drawing.Bitmap]::new('%ASSETS%\app.png'); ^
+         $ico = [System.Drawing.Icon]::FromHandle($bmp.GetHicon()); ^
+         $fs  = [System.IO.File]::OpenWrite('!ICO_OUT!'); ^
+         $ico.Save($fs); ^
+         $fs.Close(); ^
+         $ico.Dispose(); ^
+         $bmp.Dispose()" >nul 2>&1
+    if not errorlevel 1 (
+        set "HAS_ICO=1"
+        echo  [OK]    Icon converted: Flopster.ico
+    ) else (
+        echo  [WARN]  PNG to ICO conversion failed — installer will have no icon.
+    )
 )
 echo(
 
@@ -528,6 +547,8 @@ echo $WixWorkDir  = '%WIX_WORK_PS%'
 echo $Version     = '%VERSION%'
 echo $UpgradeCode = '%UPGRADE_CODE%'
 echo $HasBanner   = [bool]%HAS_BANNER%
+echo $HasIco      = [bool]%HAS_ICO%
+echo $IcoPath     = '%WIX_WORK%\Flopster.ico'
 echo(
 echo # ---------------------------------------------------------------------------
 echo # Get-DeterministicGuid : stable GUID seeded by a string (MD5-based)
@@ -650,11 +671,10 @@ echo(
 echo     ^<MediaTemplate EmbedCab="yes" /^>
 echo(
 echo     ^<Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR_SA" /^>
-echo     ^<Property Id="ARPPRODUCTICON"   Value="FlopsterIcon" /^>
 echo     ^<Property Id="ARPHELPLINK"      Value="https://github.com/resonaura/flopster" /^>
 echo     ^<Property Id="ARPURLINFOABOUT"  Value="https://github.com/resonaura/flopster" /^>
-echo(
-echo     ^<Icon Id="FlopsterIcon" SourceFile="%WIX_WORK%\banner.png" /^>
+echo $(if ($HasIco) { "    <Property Id=`"ARPPRODUCTICON`" Value=`"FlopsterIcon`" />" })
+echo $(if ($HasIco) { "    <Icon Id=`"FlopsterIcon`" SourceFile=`"$IcoPath`" />" })
 echo(
 echo     ^<StandardDirectory Id="CommonFilesFolder"^>
 echo       ^<Directory Id="dir_VST3Root" Name="VST3"^>
@@ -677,8 +697,8 @@ echo                   Name="Flopster"
 echo                   Description="Flopster - floppy drive instrument by Shiru and Resonaura"
 echo                   Target="[INSTALLDIR_SA]Flopster.exe"
 echo                   WorkingDirectory="INSTALLDIR_SA"
-echo                   Icon="FlopsterIcon"
-echo                   IconIndex="0" /^>
+echo $(if ($HasIco) { "                  Icon=`"FlopsterIcon`" IconIndex=`"0`"" })
+echo                   /^>
 echo         ^<RegistryValue Root="HKCU"
 echo                        Key="Software\Shiru\Flopster"
 echo                        Name="DesktopShortcut"
@@ -751,11 +771,10 @@ echo(
 echo     ^<Media Id="1" Cabinet="Flopster.cab" EmbedCab="yes" /^>
 echo(
 echo     ^<Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR_SA" /^>
-echo     ^<Property Id="ARPPRODUCTICON"   Value="FlopsterIcon" /^>
 echo     ^<Property Id="ARPHELPLINK"      Value="https://github.com/resonaura/flopster" /^>
 echo     ^<Property Id="ARPURLINFOABOUT"  Value="https://github.com/resonaura/flopster" /^>
-echo(
-echo     ^<Icon Id="FlopsterIcon" SourceFile="%WIX_WORK%\banner.png" /^>
+echo $(if ($HasIco) { "    <Property Id=`"ARPPRODUCTICON`" Value=`"FlopsterIcon`" />" })
+echo $(if ($HasIco) { "    <Icon Id=`"FlopsterIcon`" SourceFile=`"$IcoPath`" />" })
 echo(
 echo     ^<Directory Id="TARGETDIR" Name="SourceDir"^>
 echo(
@@ -780,8 +799,8 @@ echo                     Name="Flopster"
 echo                     Description="Flopster - floppy drive instrument by Shiru and Resonaura"
 echo                     Target="[INSTALLDIR_SA]Flopster.exe"
 echo                     WorkingDirectory="INSTALLDIR_SA"
-echo                     Icon="FlopsterIcon"
-echo                     IconIndex="0" /^>
+echo $(if ($HasIco) { "                    Icon=`"FlopsterIcon`" IconIndex=`"0`"" })
+echo                     /^>
 echo           ^<RegistryValue Root="HKCU"
 echo                          Key="Software\Shiru\Flopster"
 echo                          Name="DesktopShortcut"
@@ -946,9 +965,14 @@ set "WXS_OBJ=%WIX_WORK%\Flopster.wixobj"
 
 :: ── Candle (compile .wxs → .wixobj) ─────────────────────────────────────────
 echo  [INFO]  candle.exe ...
+:: Map TARGET_ARCH to WiX v3 candle -arch value
+set "CANDLE_ARCH=x64"
+if /i "!TARGET_ARCH!"=="x86"   set "CANDLE_ARCH=x86"
+if /i "!TARGET_ARCH!"=="arm64" set "CANDLE_ARCH=arm64"
+
 "%WIX3_CANDLE%" ^
     -nologo ^
-    -arch x64 ^
+    -arch !CANDLE_ARCH! ^
     -ext WixUIExtension ^
     -out "%WXS_OBJ%" ^
     "%WXS%"

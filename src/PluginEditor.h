@@ -153,6 +153,8 @@ public:
         colText = text;
     }
 
+    void setFont (const juce::Font& f) { m_font = f; }
+
     void drawLinearSlider (juce::Graphics& g,
                            int x, int y, int width, int height,
                            float, float, float,
@@ -172,14 +174,31 @@ public:
         g.drawRect (bounds, 1.0f);
 
         g.setColour (colText);
-        // Scale font proportionally to the slider's rendered height so it
-        // looks correct at any uiScale (bounds are already in physical pixels).
-        g.setFont (juce::Font (juce::FontOptions (juce::jmax (8.0f, height * 0.55f))));
-        g.drawText (slider.getTextFromValue (slider.getValue()),
+        g.setFont (m_font.withHeight (juce::jmax (8.0f, height * 0.55f)));
+        g.drawText (slider.getTextFromValue (slider.getValue()).toUpperCase(),
                     bounds.toNearestInt(), juce::Justification::centred, false);
     }
 
     juce::Label* createSliderTextBox (juce::Slider&) override { return nullptr; }
+
+private:
+    juce::Font m_font { juce::FontOptions (10.0f) };
+};
+
+//==============================================================================
+// Look-and-feel for buttons, combos, labels — uses the embedded pixel font.
+class FlopsterLAF : public juce::LookAndFeel_V4
+{
+public:
+    FlopsterLAF() = default;
+    void setUIFont (const juce::Font& f) { m_ui = f; }
+
+    juce::Font getTextButtonFont (juce::TextButton&, int h)    override { return m_ui.withHeight (juce::jmax (8.0f, h * 0.55f)); }
+    juce::Font getComboBoxFont   (juce::ComboBox& cb)          override { return m_ui.withHeight (juce::jmax (8.0f, cb.getHeight() * 0.58f)); }
+    juce::Font getLabelFont      (juce::Label& l)              override { return m_ui.withHeight (juce::jmax (8.0f, l.getHeight()  * 0.55f)); }
+
+private:
+    juce::Font m_ui { juce::FontOptions (10.0f) };
 };
 
 //==============================================================================
@@ -205,6 +224,12 @@ public:
     void setThemeColors (juce::Colour bg, juce::Colour fill, juce::Colour text)
     {
         laf.setThemeColors (bg, fill, text);
+        repaint();
+    }
+
+    void setFont (const juce::Font& f)
+    {
+        laf.setFont (f);
         repaint();
     }
 
@@ -236,9 +261,11 @@ public:
     void mouseDrag  (const juce::MouseEvent& e) override;
     void mouseUp    (const juce::MouseEvent& e) override;
 
-    void setNoteActive   (int midiNote, bool active, int velocity = 80);
+    void setNoteActive    (int midiNote, bool active, int velocity = 80);
     void setShowKeyLabels (bool show);
+    void setNoteNamesMode (bool noteNames);   // plugin mode: draw note names instead of key letters
     void setOctaveOffset  (int semitones);
+    void setLabelFont     (const juce::Font& f);
 
     void setThemeColors (juce::Colour bg, juce::Colour bgDark,
                          juce::Colour accent, juce::Colour lit)
@@ -263,7 +290,8 @@ private:
 
     bool activeNotes[128] {};
     int  mousePressedNote = -1;
-    bool showLabels = false;
+    bool showLabels   = false;
+    bool noteNamesMode = false;  // when true, labels show "C3" etc. instead of key letters
     int  octaveOffset = 0;
 
     float whiteKeyW  = 0.f, whiteKeyH  = 0.f;
@@ -272,6 +300,7 @@ private:
     int   whiteIndex[NUM_NOTES] {};
 
     float kbScale = 1.0f;
+    juce::Font m_labelFont { juce::FontOptions (7.5f) };
 
     struct KeyLabel { int midiNote; char label[8]; };
     std::vector<KeyLabel> keyLabels;
@@ -429,8 +458,6 @@ private:
     std::unique_ptr<juce::TextButton> btnVoices;
     std::unique_ptr<juce::TextButton> btnNormalize;
     std::unique_ptr<juce::TextButton> btnReturn;
-    std::unique_ptr<juce::TextButton> btnSlide;
-    std::unique_ptr<FlopsterSlider>   sliderSlideSpeed;
     std::unique_ptr<juce::ComboBox>   scaleBox;
 
     // Dynamic CRT effect (CA + grain driven by audio level)
@@ -458,6 +485,17 @@ private:
 
     std::map<int, bool> heldKbNotes;
     std::map<int, int>  heldKbShiftedNotes;
+
+    // ── Fonts ─────────────────────────────────────────────────────────────────
+    juce::Typeface::Ptr m_uiTypeface;
+    juce::Typeface::Ptr m_logoTypeface;
+    juce::Font          m_fontUI   { juce::FontOptions (10.0f) };
+    juce::Font          m_fontLogo { juce::FontOptions (10.0f) };
+    FlopsterLAF         m_laf;
+
+    // Font helpers — base size in logical units; paint() applies uiScale via transform
+    juce::Font uiFont   (float sz) const { return m_fontUI  .withHeight (sz); }
+    juce::Font logoFont (float sz) const { return m_fontLogo.withHeight (sz); }
 
     //==========================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FlopsterAudioProcessorEditor)
