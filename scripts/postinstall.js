@@ -240,7 +240,7 @@ if (fs.existsSync(path.join(JUCE_DIR, "modules"))) {
 if (process.platform === "win32" && !process.env["VCINSTALLDIR"]) {
   console.warn("⚠️  Skipping compile_commands.json generation on Windows.");
   console.warn(
-    "    Run from a 'Developer PowerShell for VS 2022' prompt to enable this.",
+    "    Run from a 'Developer PowerShell for VS' prompt to enable this.",
   );
   process.exit(0);
 }

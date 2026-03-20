@@ -166,6 +166,23 @@ if /i "%HOST_ARCH%"=="arm64" (
     if /i "!TARGET_ARCH!"=="x86"   set "VCVARS_ARCH=amd64_x86"
 )
 
+:: ── Try Visual Studio 2026 ────────────────────────────────────────────────────
+set "VS2026_PATH="
+if exist "!VSWHERE!" (
+    for /f "usebackq tokens=*" %%i in (
+        `"!VSWHERE!" -latest -version "[18.0,19.0)" -requires Microsoft.Component.MSBuild -property installationPath 2^>nul`
+    ) do set "VS2026_PATH=%%i"
+)
+
+if defined VS2026_PATH (
+    if exist "!VS2026_PATH!\MSBuild\Current\Bin\MSBuild.exe" (
+        set "GENERATOR=Visual Studio 18 2026"
+        set "CMAKE_ARCH_FLAG=-A !VS_PLATFORM!"
+        echo  [ok] Found Visual Studio 2026
+        goto generator_done
+    )
+)
+
 :: ── Try Visual Studio 2022 ────────────────────────────────────────────────────
 set "VS_INSTALL_PATH="
 if exist "!VSWHERE!" (
@@ -211,7 +228,7 @@ if not errorlevel 1 (
 
 echo  [ERROR] No suitable build system found.
 echo          Please install one of:
-echo            - Visual Studio 2022 (recommended): https://visualstudio.microsoft.com/
+echo            - Visual Studio 2022 or newer (recommended): https://visualstudio.microsoft.com/
 echo            - Ninja: https://ninja-build.org/
 echo            - Or: winget install Ninja-build.Ninja
 exit /b 1
@@ -250,8 +267,16 @@ if "!USE_NINJA!"=="1" (
         )
     )
 
-    :: -- 2. Hardcoded fallback list (VS 2022 + 2019, all editions, x64 + ARM64 hosts)
+    :: -- 2. Hardcoded fallback list (VS 2026 + 2022 + 2019, all editions, x64 + ARM64 hosts)
     for %%D in (
+        "%ProgramFiles%\Microsoft Visual Studio\2026\Enterprise"
+        "%ProgramFiles%\Microsoft Visual Studio\2026\Professional"
+        "%ProgramFiles%\Microsoft Visual Studio\2026\Community"
+        "%ProgramFiles%\Microsoft Visual Studio\2026\BuildTools"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2026\Enterprise"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2026\Professional"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2026\Community"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\2026\BuildTools"
         "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise"
         "%ProgramFiles%\Microsoft Visual Studio\2022\Professional"
         "%ProgramFiles%\Microsoft Visual Studio\2022\Community"
