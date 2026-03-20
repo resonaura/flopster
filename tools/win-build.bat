@@ -166,55 +166,57 @@ if /i "%HOST_ARCH%"=="arm64" (
     if /i "!TARGET_ARCH!"=="x86"   set "VCVARS_ARCH=amd64_x86"
 )
 
-:: ── Try Visual Studio 2026 ────────────────────────────────────────────────────
-set "VS2026_PATH="
+:: ── Detect any Visual Studio via vswhere (no version/requires filter) ─────────
+::
+::  VS 2026 installs to \18\ not \2026\ so hardcoded paths/version ranges
+::  are unreliable.  We ask vswhere for the latest install and derive the
+::  CMake generator name from the numeric major version.
+::
+::    Major  Year   CMake generator
+::    15     2017   Visual Studio 15 2017
+::    16     2019   Visual Studio 16 2019
+::    17     2022   Visual Studio 17 2022
+::    18     2026   Visual Studio 18 2026
+::
+set "_VS_ANY_PATH="
+set "_VS_ANY_VER="
+set "_VS_MAJOR="
+
 if exist "!VSWHERE!" (
-    for /f "usebackq tokens=*" %%i in (
-        `"!VSWHERE!" -latest -version "[18.0,19.0)" -requires Microsoft.Component.MSBuild -property installationPath 2^>nul`
-    ) do set "VS2026_PATH=%%i"
+    :: Get install path — no -requires so any edition/workload is accepted
+    for /f "usebackq tokens=*" %%P in (
+        `"!VSWHERE!" -latest -property installationPath 2^>nul`
+    ) do set "_VS_ANY_PATH=%%P"
+
+    :: Get numeric version string (e.g. "18.4.11612.150")
+    for /f "usebackq tokens=*" %%V in (
+        `"!VSWHERE!" -latest -property installationVersion 2^>nul`
+    ) do set "_VS_ANY_VER=%%V"
 )
 
-if defined VS2026_PATH (
-    if exist "!VS2026_PATH!\MSBuild\Current\Bin\MSBuild.exe" (
-        set "GENERATOR=Visual Studio 18 2026"
-        set "CMAKE_ARCH_FLAG=-A !VS_PLATFORM!"
-        echo  [ok] Found Visual Studio 2026
-        goto generator_done
-    )
+:: Extract major version from "MM.minor.build.rev"
+if defined _VS_ANY_VER (
+    for /f "tokens=1 delims=." %%M in ("!_VS_ANY_VER!") do set "_VS_MAJOR=%%M"
 )
 
-:: ── Try Visual Studio 2022 ────────────────────────────────────────────────────
-set "VS_INSTALL_PATH="
-if exist "!VSWHERE!" (
-    for /f "usebackq tokens=*" %%i in (
-        `"!VSWHERE!" -latest -version "[17.0,18.0)" -requires Microsoft.Component.MSBuild -property installationPath 2^>nul`
-    ) do set "VS_INSTALL_PATH=%%i"
+:: Map major → CMake generator name (extend list here for future VS releases)
+set "_VS_GEN="
+if "!_VS_MAJOR!"=="18" set "_VS_GEN=Visual Studio 18 2026"
+if "!_VS_MAJOR!"=="17" set "_VS_GEN=Visual Studio 17 2022"
+if "!_VS_MAJOR!"=="16" set "_VS_GEN=Visual Studio 16 2019"
+if "!_VS_MAJOR!"=="15" set "_VS_GEN=Visual Studio 15 2017"
+
+if defined _VS_GEN (
+    set "GENERATOR=!_VS_GEN!"
+    set "CMAKE_ARCH_FLAG=-A !VS_PLATFORM!"
+    echo  [ok] Found Visual Studio !_VS_ANY_VER! (generator: !_VS_GEN!)
+    goto generator_done
 )
 
-if defined VS_INSTALL_PATH (
-    if exist "!VS_INSTALL_PATH!\MSBuild\Current\Bin\MSBuild.exe" (
-        set "GENERATOR=Visual Studio 17 2022"
-        set "CMAKE_ARCH_FLAG=-A !VS_PLATFORM!"
-        echo  [ok] Found Visual Studio 2022
-        goto generator_done
-    )
-)
-
-:: ── Try Visual Studio 2019 ────────────────────────────────────────────────────
-set "VS2019_PATH="
-if exist "!VSWHERE!" (
-    for /f "usebackq tokens=*" %%i in (
-        `"!VSWHERE!" -version "[16.0,17.0)" -requires Microsoft.Component.MSBuild -property installationPath 2^>nul`
-    ) do set "VS2019_PATH=%%i"
-)
-
-if defined VS2019_PATH (
-    if exist "!VS2019_PATH!\MSBuild\Current\Bin\MSBuild.exe" (
-        set "GENERATOR=Visual Studio 16 2019"
-        set "CMAKE_ARCH_FLAG=-A !VS_PLATFORM!"
-        echo  [ok] Found Visual Studio 2019
-        goto generator_done
-    )
+:: VS found but major version not mapped — warn and fall through to Ninja
+if defined _VS_ANY_PATH (
+    echo  [warn] Visual Studio !_VS_ANY_VER! found but no CMake generator name is known for it.
+    echo  [warn] Falling back to Ninja.  Set up the environment manually if needed.
 )
 
 :: ── Try Ninja ─────────────────────────────────────────────────────────────────
@@ -228,7 +230,7 @@ if not errorlevel 1 (
 
 echo  [ERROR] No suitable build system found.
 echo          Please install one of:
-echo            - Visual Studio 2022 or newer (recommended): https://visualstudio.microsoft.com/
+echo            - Visual Studio 2019 or newer (recommended): https://visualstudio.microsoft.com/
 echo            - Ninja: https://ninja-build.org/
 echo            - Or: winget install Ninja-build.Ninja
 exit /b 1
@@ -245,38 +247,35 @@ exit /b 1
 set "VCVARS="
 if "!USE_NINJA!"=="1" (
 
-    :: -- 1. Try vswhere (most reliable) ----------------------------------------
+    :: -- 1. Try vswhere (no -requires so any edition works) --------------------
     if exist "!VSWHERE!" (
-        set "_VS_PATH="
-        for /f "usebackq tokens=*" %%P in (
-            `"!VSWHERE!" -latest -requires Microsoft.VisualCpp.Tools.HostX64.TargetARM64 -property installationPath 2^>nul`
-        ) do set "_VS_PATH=%%P"
-
-        :: Broader query if the specific component wasn't found
-        if not defined _VS_PATH (
+        :: Reuse _VS_ANY_PATH detected above; if empty query again without filters
+        set "_VCVARS_VS_PATH=!_VS_ANY_PATH!"
+        if not defined _VCVARS_VS_PATH (
             for /f "usebackq tokens=*" %%P in (
-                `"!VSWHERE!" -latest -requires Microsoft.Component.MSBuild -property installationPath 2^>nul`
-            ) do set "_VS_PATH=%%P"
+                `"!VSWHERE!" -latest -property installationPath 2^>nul`
+            ) do set "_VCVARS_VS_PATH=%%P"
         )
 
-        if defined _VS_PATH (
-            if exist "!_VS_PATH!\VC\Auxiliary\Build\vcvarsall.bat" (
-                set "VCVARS=!_VS_PATH!\VC\Auxiliary\Build\vcvarsall.bat"
+        if defined _VCVARS_VS_PATH (
+            if exist "!_VCVARS_VS_PATH!\VC\Auxiliary\Build\vcvarsall.bat" (
+                set "VCVARS=!_VCVARS_VS_PATH!\VC\Auxiliary\Build\vcvarsall.bat"
                 goto vcvars_found
             )
         )
     )
 
-    :: -- 2. Hardcoded fallback list (VS 2026 + 2022 + 2019, all editions, x64 + ARM64 hosts)
+    :: -- 2. Hardcoded fallback list — covers new \18\ layout (VS 2026) and
+    ::       older \year\ layouts (VS 2022, 2019), all editions, x64 + ARM64 hosts
     for %%D in (
-        "%ProgramFiles%\Microsoft Visual Studio\2026\Enterprise"
-        "%ProgramFiles%\Microsoft Visual Studio\2026\Professional"
-        "%ProgramFiles%\Microsoft Visual Studio\2026\Community"
-        "%ProgramFiles%\Microsoft Visual Studio\2026\BuildTools"
-        "%ProgramFiles(x86)%\Microsoft Visual Studio\2026\Enterprise"
-        "%ProgramFiles(x86)%\Microsoft Visual Studio\2026\Professional"
-        "%ProgramFiles(x86)%\Microsoft Visual Studio\2026\Community"
-        "%ProgramFiles(x86)%\Microsoft Visual Studio\2026\BuildTools"
+        "%ProgramFiles%\Microsoft Visual Studio\18\Enterprise"
+        "%ProgramFiles%\Microsoft Visual Studio\18\Professional"
+        "%ProgramFiles%\Microsoft Visual Studio\18\Community"
+        "%ProgramFiles%\Microsoft Visual Studio\18\BuildTools"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\18\Enterprise"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\18\Professional"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\18\Community"
+        "%ProgramFiles(x86)%\Microsoft Visual Studio\18\BuildTools"
         "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise"
         "%ProgramFiles%\Microsoft Visual Studio\2022\Professional"
         "%ProgramFiles%\Microsoft Visual Studio\2022\Community"
