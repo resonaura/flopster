@@ -1,4 +1,13 @@
+<img src="assets/app.png" width="64" height="64" alt="Flopster Icon" />
+
 # Flopster
+
+[![Version](https://img.shields.io/badge/version-2.0-blue.svg)](CMakeLists.txt)
+[![License: WTFPL](https://img.shields.io/badge/License-WTFPL-brightgreen.svg)](http://www.wtfpl.net/)
+[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-lightgrey.svg)](#supported-formats)
+[![Formats](https://img.shields.io/badge/Formats-VST3%20%7C%20AU%20%7C%20Standalone-orange.svg)](#supported-formats)
+[![JUCE](https://img.shields.io/badge/Framework-JUCE%208-8A2BE2.svg)](https://juce.com/)
+[![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C.svg)](CMakeLists.txt)
 
 **Floppy drive instrument plugin by Shiru & Resonaura**
 
