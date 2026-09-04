@@ -8,6 +8,7 @@
 [![Formats](https://img.shields.io/badge/Formats-VST3%20%7C%20AU%20%7C%20Standalone-orange.svg)](#supported-formats)
 [![JUCE](https://img.shields.io/badge/Framework-JUCE%208-8A2BE2.svg)](https://juce.com/)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C.svg)](CMakeLists.txt)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/resonaura)
 
 **Floppy drive instrument plugin by Shiru & Resonaura**
 
