@@ -11,6 +11,11 @@
 
 **Floppy drive instrument plugin by Shiru & Resonaura**
 
+
+<p align="center">
+  <img src="media/flopster-ui.png" width="800" alt="Flopster Synthesizer Plugin Interface" />
+</p>
+
 A VST3 / AU / Standalone plugin that imitates the noises of a floppy disk drive playing music — a beloved gimmick of the MS-DOS era. Sample-based, with the engine controlling playback in a way that produces a realistic mechanical sound.
 
 Original plugin and all samples recorded by **Shiru**.  
