@@ -1,4 +1,4 @@
-<img src="https://raw.githubusercontent.com/resonaura/flopster/main/assets/app.png" width="64" height="64" alt="Flopster Icon" />
+<img src="https://raw.githubusercontent.com/resonaura/flopster/main/assets/app.png" width="64" alt="Flopster Icon" />
 
 # Flopster
 
