@@ -1,21 +1,22 @@
-<img src="assets/app.png" width="64" height="64" alt="Flopster Icon" />
+<img src="https://raw.githubusercontent.com/resonaura/flopster/main/assets/app.png" width="64" height="64" alt="Flopster Icon" />
 
 # Flopster
 
 [![Version](https://img.shields.io/badge/Version-2.0-blue.svg)](CMakeLists.txt)
-[![License](https://img.shields.io/badge/License-WTFPL-brightgreen.svg)](http://www.wtfpl.net/)
+[![License](https://img.shields.io/badge/License-WTFPL-brightgreen.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-lightgrey.svg)](#supported-formats)
 [![Formats](https://img.shields.io/badge/Formats-VST3%20%7C%20AU%20%7C%20Standalone-orange.svg)](#supported-formats)
 [![JUCE](https://img.shields.io/badge/Framework-JUCE%208-8A2BE2.svg)](https://juce.com/)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C.svg)](CMakeLists.txt)
 
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor%20on%20GitHub-EA4AAA?logo=github-sponsors&logoColor=white)](https://github.com/sponsors/resonaura)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/resonaura)
 
 **Floppy drive instrument plugin by Shiru & Resonaura**
 
 
 <p align="center">
-  <img src="media/flopster-ui.png" width="800" alt="Flopster Synthesizer Plugin Interface" />
+  <img src="https://raw.githubusercontent.com/resonaura/flopster/main/media/flopster-ui.png" width="800" alt="Flopster Synthesizer Plugin Interface" />
 </p>
 
 A VST3 / AU / Standalone plugin that imitates the noises of a floppy disk drive playing music — a beloved gimmick of the MS-DOS era. Sample-based, with the engine controlling playback in a way that produces a realistic mechanical sound.
